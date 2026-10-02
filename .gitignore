@@ -1,0 +1,25 @@
+# Rust build output
+signer/target/
+
+# Wallet seed, wallet database, vault records, auction data — never commit
+signer/data/
+signer/data-*/
+vault-web/data/
+*.tmp
+
+# Secrets and local settings
+.env
+.env.*
+!.env.example
+
+# Node / Next.js
+node_modules/
+.next/
+*.tsbuildinfo
+next-env.d.ts
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
