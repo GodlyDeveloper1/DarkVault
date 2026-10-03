@@ -10,23 +10,26 @@ Built solo by [@Diaguren_Labs](https://x.com/Diaguren_Labs) for the
 ## How an auction works
 
 1. **List.** A seller describes a lot, sets a reserve and an end time, and gives a shielded
-   payout address. No account.
+   payout address. No account. Bidding opens when the seller's bond has arrived.
 2. **Bid.** The bidder's browser seals the bid in a commitment. The server answers with a
    deposit address made for that one bid.
-3. **Deposit.** The bidder sends at least their bid to that address from a shielded balance.
+3. **Deposit.** The bidder sends at least their bid plus a small bond to that address from a
+   shielded balance.
 4. **Close and reveal.** Bidding stops, then bidders reveal their amounts.
 5. **Settle.** The highest bid wins and pays **exactly what it bid**. **One shielded
    transaction** returns the winner's excess and every other deposit, and moves the price
    into the auction's escrow vault. Each payment carries an equal share of the network fee.
-6. **Deliver.** The seller hands over the lot; then a second shielded transaction pays the
-   seller. If the lot is not handed over, that transaction returns the price to the winner.
+6. **Deliver.** The seller hands over the lot and the winner checks it; then a second shielded
+   transaction pays the seller and returns both bonds. If the lot is not handed over, or a
+   dispute goes against the seller, that transaction returns the price to the winner with the
+   seller's bond.
 
 ## What exists so far
 
 | Part | What it does | State |
 |---|---|---|
 | `signer/` | Rust service on librustzcash, the only part that holds keys. One Zcash account per auction (a "vault"), one never-reused deposit address per bid, and settlement in a single shielded transaction. | Proven on testnet (below) |
-| `vault-core/` | TypeScript rules shared by the browser and the server: bid commitments, the decision (highest sealed bid wins and pays its bid), the settlement plan, and sealed delivery. 30 tests. | Done for the core |
+| `vault-core/` | TypeScript rules shared by the browser and the server: bid commitments, the decision (highest sealed bid wins and pays its bid), the settlement plan, and sealed delivery. 35 tests. | Done for the core |
 | `vault-web/` | Next.js app: list a lot, place a sealed bid, deposit, reveal, result, delivery. The server runs the auction: it closes bidding, decides the winner from the reveals and asks the signer to settle. | Core flow works; design pass to come |
 | `scripts/` | A testnet proof of the signer, a stand-in signer for development, and a small wallet helper. | |
 
@@ -40,9 +43,16 @@ the browser; `vault-core/src/delivery.ts`).
 |---|---|---|
 | Listing | The seller's browser encrypts the lot. The site stores the ciphertext and a hash of the lot key. | The seller's browser publishes a public key. |
 | Handover | After the sale, the seller opens their manage link and their browser seals the lot key to the winner's key. | The winner's browser seals the shipping address to the seller's key. The seller ships and says so, with an optional sealed note. |
-| Check | The winner's browser opens the key, checks it against the hash and decrypts the lot. If that works it confirms by itself. | The winner confirms when it arrives. |
+| Check | The winner's browser opens the key, checks it against the hash and decrypts the lot. The winner looks at it and says whether it is what was described. | The winner confirms when it arrives. |
 | Payout | Confirmed, or no complaint within the time limit: the seller is paid. Not handed over in time: the winner is refunded. | The same. |
-| Dispute | The winner hands over the bid's delivery key; the site repeats the check and refunds the winner if the key doesn't open the lot. No judgement call. | The price stays held until the operator decides (`scripts/operator.ps1`). |
+| Wrong key | The winner hands over the bid's delivery key; the site repeats the check and refunds the winner if the key doesn't open the lot. No judgement call. | |
+| Not as described | The winner hands over the key to that one lot. The price stays held; the operator opens exactly what was delivered, reads both sides and decides (`scripts/operator.ps1`). | The price stays held; the operator reads both sides and decides. |
+
+A third kind of lot is **a promise**: something the seller will do for the winner, such as
+naming rights or an hour of their time. It runs like a physical lot. Where a postal address
+would go, the winner sends sealed instructions (the name they chose, say) that only the seller
+can read; the seller does it, marks it done with an optional sealed note, and the winner
+confirms. The same time limits, disputes and bonds apply.
 
 How it is built:
 
@@ -54,10 +64,36 @@ How it is built:
   the signer's rules below, so nothing can stay with the coordinator.
 - **Time limits**, set by the seller: one for the handover, one for complaints.
 
+### Bonds: making dishonesty cost something
+
+Escrow alone means a cheat only fails to gain. Bonds make them lose.
+
+- **The seller's bond** is paid into the auction's escrow vault before bidding opens (the
+  listing stays hidden until it arrives, and is cancelled if it never does). Bidders see the
+  amount. The minimum is 10% of the reserve; a seller can stake more.
+- **The bidder's bond** rides on every bid: a bid counts only if its deposit covers the bid plus
+  the bond. Losing bidders get it back at the close with the rest of their deposit.
+- At the end, each bond goes back to its owner, in full, unless its owner was at fault:
+
+| How it ended | Price | Seller's bond | Winner's bond |
+|---|---|---|---|
+| Delivered and confirmed, or no complaint in time | seller | seller | winner |
+| Seller never handed over, sent a wrong key, or lost a dispute | winner | **winner** | winner |
+| Winner opened a dispute and lost it | seller | seller | **seller** |
+| Winner never said where to send a posted lot | winner | seller | **seller** |
+| Operator finds nobody at fault | as decided | seller | winner |
+| Lot did not sell | | seller | |
+
+Every row pays out exactly what the escrow vault holds (`planEscrowPayout` in `vault-core`).
+
 What this does not solve, and says so: the site can prove the right key was delivered, not
 that a file is what the description promised; a dispute over a posted item needs a human; a
 refund after a failed delivery is the price minus two network fee shares; and the site holds
-the price while it is in escrow, as it holds deposits during bidding.
+the price while it is in escrow, as it holds deposits during bidding. A one-time code (a gift
+card, a licence key) can't be proven used or unused by anyone, so for those the rule is: if the
+delivered code matches the description, the sale stands. Sellers and bidders are anonymous, so
+there is no reputation; the bonds are what a cheat has to lose. A seller whose lot doesn't sell
+gets the bond back minus one network fee.
 
 ### Connect wallet, without handing over an address
 
@@ -147,11 +183,13 @@ powershell -ExecutionPolicy Bypass -File scripts\wallet.ps1 send <deposit addres
 ```
 
 `address` prints a fresh shielded address to use as a payout or refund address; `send` funds a
-bid. List a lot at `/sell` and **keep the seller link**. Place two bids from two browser
-windows, fund them, and wait: the auction closes, the browsers reveal, and one transaction
+bid. List a lot at `/sell` and **keep the seller link**. Open the auction with it and send the
+bond to the address shown; bidding opens when it is in a block. Place two bids from two browser
+windows, fund each with its bid plus the bond, and wait: the auction closes, the browsers reveal, and one transaction
 returns the losing deposit and moves the price into escrow. Open the seller link: for a
-digital lot the key goes to the winner by itself, the winner's window unlocks the lot, and a
-second transaction pays the seller.
+digital lot the key goes to the winner by itself and the winner's window unlocks the lot. Press
+"It is what was described" there, and a second transaction pays the seller and returns both
+bonds.
 
 ## Web app settings
 
@@ -162,6 +200,8 @@ second transaction pays the seller.
 | `VAULT_MIN_DURATION_SEC` | `600` | Shortest auction allowed |
 | `VAULT_MIN_REVEAL_SEC` | `300` | Shortest reveal window allowed |
 | `VAULT_CLOSE_GRACE_SEC` | `40` | Wait after the end time before closing, so the signer has scanned the last blocks |
+| `VAULT_BOND_PERCENT` | `10` | Bonds, as a percentage of the reserve (never less than 0.0005 TAZ). `0` switches bonds off |
+| `VAULT_BOND_WAIT_SEC` | `7200` | How long a new listing waits for the seller's bond before it is cancelled |
 | `VAULT_MIN_DELIVERY_SEC` | `3600` | Shortest handover and complaint time limits a seller can set |
 | `VAULT_OPERATOR_KEY` | unset | Turns on the operator's dispute routes. 24 characters or more. Keep it secret |
 | `TRUST_PROXY` | off | Set to `1` behind your own reverse proxy so rate limits see visitors' addresses |

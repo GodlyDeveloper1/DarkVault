@@ -3,6 +3,8 @@ import { formatCoins } from "vault-core";
 import type { PublicAuction } from "@/lib/views";
 
 export function stateLabel(a: PublicAuction): { text: string; cls: string } {
+  if (a.state === "funding") return { text: "Not open yet", cls: "" };
+  if (a.outcome?.cancelled) return { text: "Never opened", cls: "" };
   if (a.state === "open") return { text: "Open", cls: "open" };
   if (a.state === "revealing") return { text: "Revealing", cls: "revealing" };
   if (a.state === "settling") return { text: a.outcome?.sold ? "Sold · settling" : "Settling", cls: "settling" };

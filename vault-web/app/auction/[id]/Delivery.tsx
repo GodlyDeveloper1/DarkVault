@@ -32,9 +32,10 @@ import type { BidView, PublicAuction, SellerView } from "@/lib/views";
 const when = (t: number | null) =>
   t ? new Date(t).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "the time limit";
 
-/** The same reasons, said to the winner. */
-const REASON_WINNER: Record<string, string> = {
+/** Why the delivery ended the way it did, said to the winner and to the seller. */
+const WHY_WINNER: Record<string, string> = {
   confirmed: "You confirmed you have the lot.",
+  "as-described": "You confirmed the lot is what was described.",
   "no-complaint": "You did not complain within the time limit.",
   "not-delivered": "The seller did not hand it over in time.",
   "no-shipping-details": "No shipping details were sent in time.",
@@ -42,16 +43,44 @@ const REASON_WINNER: Record<string, string> = {
   "key-was-right": "The check showed the delivered key opens the lot.",
   operator: "The operator decided the dispute.",
 };
-
-const REASON: Record<string, string> = {
+const WHY_SELLER: Record<string, string> = {
   confirmed: "The winner confirmed they have the lot.",
+  "as-described": "The winner confirmed the lot is what was described.",
   "no-complaint": "The winner did not complain within the time limit.",
   "not-delivered": "The lot was not handed over in time.",
   "no-shipping-details": "The winner did not send shipping details in time.",
   "wrong-key": "The key that was delivered does not open the lot.",
   "key-was-right": "A dispute was opened, and the check showed the delivered key opens the lot.",
-  operator: "A dispute was opened and the operator decided it.",
+  operator: "The operator decided the dispute.",
 };
+
+type Resolution = { decision: string; reason: string; fault: string };
+
+/** What the outcome means for the winner's money, bonds included. */
+function winnerOutcome(r: Resolution, bonds: boolean): string {
+  if (r.decision === "release") {
+    if (!bonds) return "Your payment went to the seller.";
+    return r.fault === "winner" ? "Your payment went to the seller, and so did your bond." : "Your payment went to the seller. Your bond comes back to you.";
+  }
+  if (!bonds) return "Your payment is coming back to you.";
+  if (r.fault === "seller") return "Your payment and your bond are coming back to you, with the seller's bond on top.";
+  if (r.fault === "winner") return "Your payment is coming back to you, but your bond went to the seller.";
+  return "Your payment and your bond are coming back to you.";
+}
+
+/** What the outcome means for the seller's money, bonds included. */
+function sellerOutcome(r: Resolution, bonds: boolean): string {
+  if (r.decision === "release") {
+    if (!bonds) return "The price is released to you.";
+    return r.fault === "winner" ? "The price is released to you, with your bond and the winner's bond." : "The price is released to you, with your bond.";
+  }
+  if (!bonds) return "The price went back to the winner.";
+  if (r.fault === "seller") return "The price went back to the winner, and so did your bond.";
+  if (r.fault === "winner") return "The price went back to the winner. You keep your bond and receive theirs.";
+  return "The price went back to the winner. Your bond comes back to you.";
+}
+
+const toHex = (bytes: Uint8Array) => [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 
 async function post(url: string, headers: Record<string, string>, body: unknown): Promise<void> {
   const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body) });
@@ -81,10 +110,12 @@ export function SellerDelivery({
 }) {
   const d = seller.delivery;
   const kind = auction.delivery?.kind;
+  const promise = kind === "promise";
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [address, setAddress] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [reply, setReply] = useState("");
   const sending = useRef(false);
   const url = `/api/auctions/${auction.id}/seller/delivery`;
 
@@ -140,13 +171,29 @@ export function SellerDelivery({
     }
   }
 
+  async function answer() {
+    setBusy(true);
+    setError(null);
+    try {
+      await post(url, { "x-manage-key": token }, { reply });
+      setReply("");
+      refresh();
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!d) {
-    if (!kind || auction.state === "settled") return null;
+    if (!kind || auction.state === "settled" || auction.state === "funding") return null;
     return (
       <p className="small muted" style={{ margin: "12px 0 0" }} id="seller-delivery">
         {kind === "digital"
           ? "When the lot sells, the price is held. Keep this link: open it after the sale and your browser sends the winner the key. You are paid once they have it."
-          : "When the lot sells, the price is held. Open this link after the sale to see where to send it. You are paid once the winner has it."}
+          : promise
+            ? "When the lot sells, the price is held. Open this link after the sale to read what the winner wants. You are paid once it is done and they confirm."
+            : "When the lot sells, the price is held. Open this link after the sale to see where to send it. You are paid once the winner has it."}
       </p>
     );
   }
@@ -156,7 +203,7 @@ export function SellerDelivery({
       <h3>Delivery</h3>
       {d.held != null && !d.resolution && (
         <p className="small">
-          <strong>{formatCoins(d.held)} TAZ is held</strong> until the lot is handed over.
+          <strong>{formatCoins(d.held)} TAZ is held</strong> until {promise ? "the promise is kept" : "the lot is handed over"}.
         </p>
       )}
 
@@ -168,15 +215,15 @@ export function SellerDelivery({
 
       {d.stage === "awaiting-address" && (
         <p className="small">
-          Waiting for the winner to say where to send it. They have until {when(d.address_by)}; if they don&apos;t, the sale is undone and they
-          are refunded.
+          Waiting for the winner to say {promise ? "what they want" : "where to send it"}. They have until {when(d.address_by)}; if they don&apos;t,
+          the sale is undone and they are refunded.
         </p>
       )}
 
-      {d.kind === "physical" && address && (
+      {d.kind !== "digital" && address && (
         <>
           <p className="small" style={{ marginBottom: 6 }}>
-            <strong>Send it to:</strong> <span className="muted">(only your browser can read this)</span>
+            <strong>{promise ? "The winner asks for:" : "Send it to:"}</strong> <span className="muted">(only your browser can read this)</span>
           </p>
           <pre className="sealed-text" id="shipping-details">
             {address}
@@ -184,14 +231,16 @@ export function SellerDelivery({
         </>
       )}
 
-      {d.stage === "awaiting-handover" && d.kind === "physical" && (
+      {d.stage === "awaiting-handover" && d.kind !== "digital" && (
         <>
-          <p className="small">Ship it by {when(d.deliver_by)}, then say so here. If you don&apos;t, the winner is refunded.</p>
-          <label htmlFor="ship-note">Tracking number or a note for the winner (optional)</label>
+          <p className="small">
+            {promise ? "Do it" : "Ship it"} by {when(d.deliver_by)}, then say so here. If you don&apos;t, the winner is refunded.
+          </p>
+          <label htmlFor="ship-note">{promise ? "A note or proof for the winner (optional)" : "Tracking number or a note for the winner (optional)"}</label>
           <input id="ship-note" value={note} maxLength={400} onChange={(e) => setNote(e.target.value)} placeholder="Sealed so only the winner can read it" />
           <div className="row" style={{ marginTop: 12 }}>
             <button className="primary" id="mark-shipped" disabled={busy} onClick={() => void shipped()}>
-              {busy ? "Saving…" : "I have shipped it"}
+              {busy ? "Saving…" : promise ? "It is done" : "I have shipped it"}
             </button>
           </div>
         </>
@@ -199,31 +248,54 @@ export function SellerDelivery({
 
       {d.stage === "awaiting-confirmation" && (
         <p className="small" id="seller-waiting">
-          {d.kind === "digital" ? "The key has been delivered." : "Marked as shipped."} You are paid as soon as the winner confirms, or on{" "}
-          {when(d.dispute_by)} if they don&apos;t complain.
+          {d.kind === "digital" ? "The key has been delivered. The winner can now open the lot and check it." : promise ? "Marked as done." : "Marked as shipped."} You are paid
+          as soon as the winner confirms, or on {when(d.dispute_by)} if they don&apos;t complain.
         </p>
       )}
 
-      {d.stage === "disputed" && (
-        <div className="card warn" style={{ marginBottom: 0 }}>
-          <strong>The winner opened a dispute.</strong>
-          {d.dispute?.reason && (
+      {d.stage === "disputed" && d.dispute && (
+        <div className="card warn" style={{ marginBottom: 0 }} id="seller-dispute">
+          <strong>{d.dispute.kind === "not-as-described" ? "The winner says the lot is not what was described." : "The winner opened a dispute."}</strong>
+          {d.dispute.reason && (
             <p className="small" style={{ margin: "8px 0 0", whiteSpace: "pre-wrap" }}>
               &ldquo;{d.dispute.reason}&rdquo;
             </p>
           )}
           <p className="small muted" style={{ margin: "8px 0 0" }}>
             The price stays held until the operator decides.
+            {d.dispute.kind === "not-as-described" && " The operator can open the lot you delivered and compare it with your description."}
+            {d.seller_bond > 0 && " Whoever loses the dispute also loses their bond to the other side."}
           </p>
+          {d.dispute.seller_reply ? (
+            <p className="small" style={{ margin: "10px 0 0", whiteSpace: "pre-wrap" }} id="seller-reply-sent">
+              <strong>Your answer:</strong> &ldquo;{d.dispute.seller_reply}&rdquo;
+            </p>
+          ) : (
+            <>
+              <label htmlFor="reply">Your answer, for the operator</label>
+              <textarea id="reply" value={reply} maxLength={600} onChange={(e) => setReply(e.target.value)} placeholder="What you sent, and why it matches the description." />
+              <div className="row" style={{ marginTop: 10 }}>
+                <button className="primary" id="send-reply" disabled={busy || reply.trim().length < 10} onClick={() => void answer()}>
+                  {busy ? "Sending…" : "Send my answer"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
       {d.resolution && (
         <p className="small" id="seller-resolution">
-          <strong className={d.resolution.decision === "release" ? "ok" : "error"}>
-            {d.resolution.decision === "release" ? "The price is released to you." : "The price went back to the winner."}
-          </strong>{" "}
-          {REASON[d.resolution.reason]}
+          <strong className={d.resolution.decision === "release" ? "ok" : "error"}>{sellerOutcome(d.resolution, d.seller_bond + d.buyer_bond > 0)}</strong>{" "}
+          {d.kind === "digital" && d.resolution.reason === "no-complaint"
+            ? "The winner unlocked nothing or said nothing within the time limit."
+            : promise && d.resolution.reason === "no-shipping-details"
+              ? "The winner did not say what they wanted in time."
+              : promise && d.resolution.reason === "confirmed"
+                ? "The winner confirmed it was done."
+                : promise && d.resolution.reason === "not-delivered"
+                  ? "It was not marked as done in time."
+                  : WHY_SELLER[d.resolution.reason]}
         </p>
       )}
       {error && <p className="error small">{error}</p>}
@@ -235,10 +307,15 @@ export function SellerDelivery({
 // Winner
 // ---------------------------------------------------------------------------
 
-type Unlocked = { state: "working" } | { state: "open"; header: LotHeader; content: Uint8Array } | { state: "bad"; why: string } | { state: "no-key" };
+type Unlocked =
+  | { state: "working" }
+  | { state: "open"; header: LotHeader; content: Uint8Array; lotKey: string }
+  | { state: "bad"; why: string }
+  | { state: "no-key" };
 
 export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: PublicAuction; ticket: Ticket; view: BidView; refresh: () => void }) {
   const d = view.delivery!;
+  const promise = d.kind === "promise";
   const sellerPub = auction.delivery?.seller_pub;
   const url = `/api/auctions/${auction.id}/bids/${ticket.bid_id}/delivery`;
   const [error, setError] = useState<string | null>(null);
@@ -249,7 +326,6 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
   const [editing, setEditing] = useState(false);
   const [complaining, setComplaining] = useState(false);
   const [reason, setReason] = useState("");
-  const confirming = useRef(false);
 
   async function act(body: Record<string, unknown>) {
     setBusy(true);
@@ -280,7 +356,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
         const res = await fetch(`/api/auctions/${auction.id}/bids/${ticket.bid_id}/lot`, { headers: { "x-bid-token": await bidToken(ticket.nonce) } });
         if (!res.ok) throw new Error("the encrypted lot could not be downloaded");
         const lot = await decryptLot(lotKey, new Uint8Array(await res.arrayBuffer()));
-        if (!stop) setUnlocked({ state: "open", ...lot });
+        if (!stop) setUnlocked({ state: "open", ...lot, lotKey: toHex(lotKey) });
       } catch (e) {
         if (!stop) setUnlocked({ state: "bad", why: e instanceof DOMException ? "it does not decrypt the lot" : message(e) });
       }
@@ -291,18 +367,8 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [envelope, ticket.delivery_key, auction.id, ticket.bid_id]);
 
-  // A lot that opened is a lot that was delivered: say so, which releases the seller's payment.
-  useEffect(() => {
-    if (unlocked?.state !== "open" || d.stage !== "awaiting-confirmation" || confirming.current) return;
-    confirming.current = true;
-    void act({ action: "confirm" }).then((done) => {
-      if (!done) confirming.current = false;
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlocked?.state, d.stage]);
-
   // Physical: the seller's note (a tracking number, say), sealed to this bid.
-  const sealedNote = d.kind === "physical" ? d.envelope : null;
+  const sealedNote = d.kind !== "digital" ? d.envelope : null;
   useEffect(() => {
     if (!sealedNote || !ticket.delivery_key) return setNote(null);
     let stop = false;
@@ -333,12 +399,12 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  const showAddressForm = d.kind === "physical" && (d.stage === "awaiting-address" || (editing && d.stage === "awaiting-handover"));
+  const showAddressForm = d.kind !== "digital" && (d.stage === "awaiting-address" || (editing && d.stage === "awaiting-handover"));
 
   return (
     <div id="winner-delivery" data-stage={d.stage} style={{ marginTop: 14 }}>
       <h3>Delivery</h3>
-      {!d.resolution && <p className="small">Your payment is held and is not with the seller yet. It is released when you have the lot.</p>}
+      {!d.resolution && <p className="small">Your payment is held and is not with the seller yet. It is released when {promise ? "the seller has done what was promised" : "you have the lot"}.</p>}
 
       {/* Digital */}
       {d.kind === "digital" && d.stage === "awaiting-handover" && (
@@ -354,6 +420,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
       {unlocked?.state === "open" && (
         <div className="card accent" id="lot" style={{ marginBottom: 12 }}>
           <strong>Your lot</strong> <span className="muted small">(unlocked in this browser; the site can&apos;t read it)</span>
+
           {unlocked.header.kind === "text" ? (
             <pre className="sealed-text" id="lot-text">
               {new TextDecoder().decode(unlocked.content)}
@@ -367,6 +434,46 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           )}
         </div>
       )}
+      {unlocked?.state === "open" && d.stage === "awaiting-confirmation" && !complaining && (
+        <div id="review">
+          <p className="small">
+            <strong>Check it.</strong> The seller is paid when you say it is what was described, or on {when(d.dispute_by)} if you say nothing.
+          </p>
+          <div className="row">
+            <button className="primary" id="confirm-described" disabled={busy} onClick={() => void act({ action: "confirm" })}>
+              It is what was described
+            </button>
+            <button type="button" id="complain" onClick={() => setComplaining(true)}>
+              This is not what was described
+            </button>
+          </div>
+        </div>
+      )}
+      {unlocked?.state === "open" && complaining && d.stage === "awaiting-confirmation" && (
+        <form
+          id="dispute-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void act({ action: "dispute", lot_key: unlocked.lotKey, reason }).then((done) => done && setComplaining(false));
+          }}
+        >
+          <label htmlFor="reason">What is wrong with it?</label>
+          <textarea id="reason" value={reason} maxLength={600} onChange={(e) => setReason(e.target.value)} placeholder="How it differs from the description." />
+          <p className="hint">
+            Your browser hands the operator the key to this one lot, so they can open exactly what was delivered and compare it with the
+            description. The seller and the operator can read what you write. Your payment stays held until the operator decides.
+            {d.buyer_bond > 0 && <> If the operator finds the lot is as described, your bond of {formatCoins(d.buyer_bond)} TAZ goes to the seller.</>}
+          </p>
+          <div className="row" style={{ marginTop: 12 }}>
+            <button className="primary" disabled={busy || reason.trim().length < 10}>
+              Open a dispute
+            </button>
+            <button type="button" onClick={() => setComplaining(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
       {unlocked?.state === "bad" && !d.resolution && (
         <div className="card bad" id="lot-bad" style={{ marginBottom: 12 }}>
           <strong>The key the seller sent does not open the lot:</strong> {unlocked.why}.
@@ -375,7 +482,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
             it fails. You have until {when(d.dispute_by)}.
           </p>
           <button className="primary" id="open-dispute" disabled={busy} onClick={() => void act({ action: "dispute", delivery_key: ticket.delivery_key })}>
-            {busy ? "Checking…" : "Get my payment back"}
+            {busy ? "Checking…" : d.seller_bond > 0 ? "Get my payment back, with the seller's bond" : "Get my payment back"}
           </button>
         </div>
       )}
@@ -388,8 +495,14 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
       {/* Physical */}
       {showAddressForm && (
         <form onSubmit={sendAddress} id="shipping-form">
-          <label htmlFor="shipping">Where should the seller send it?</label>
-          <textarea id="shipping" value={address} maxLength={1000} onChange={(e) => setAddress(e.target.value)} placeholder={"Name\nStreet and number\nPostcode, town\nCountry"} />
+          <label htmlFor="shipping">{promise ? "What should the seller do for you?" : "Where should the seller send it?"}</label>
+          <textarea
+            id="shipping"
+            value={address}
+            maxLength={1000}
+            onChange={(e) => setAddress(e.target.value)}
+            placeholder={promise ? "The name you choose, or exactly what you want done." : "Name\nStreet and number\nPostcode, town\nCountry"}
+          />
           <p className="hint">
             Sealed in your browser so only the seller can read it; the site can&apos;t.
             {d.stage === "awaiting-address" && <> Send it by {when(d.address_by)}, or the sale is undone and your payment comes back.</>}
@@ -406,18 +519,20 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           </div>
         </form>
       )}
-      {d.kind === "physical" && d.stage === "awaiting-handover" && !editing && (
+      {d.kind !== "digital" && d.stage === "awaiting-handover" && !editing && (
         <p className="small" id="shipping-sent">
-          Your shipping details are with the seller. They have until {when(d.deliver_by)} to ship; if they don&apos;t, your payment comes back.{" "}
+          {promise ? "Your request is" : "Your shipping details are"} with the seller. They have until {when(d.deliver_by)} to{" "}
+          {promise ? "do it" : "ship"}; if they don&apos;t, your payment comes back.{" "}
           <button type="button" className="link small" onClick={() => setEditing(true)}>
-            Correct the details
+            {promise ? "Correct my request" : "Correct the details"}
           </button>
         </p>
       )}
-      {d.kind === "physical" && d.stage === "awaiting-confirmation" && (
+      {d.kind !== "digital" && d.stage === "awaiting-confirmation" && (
         <>
           <p className="small">
-            <strong>The seller has shipped it.</strong> Confirm when it arrives. If you say nothing by {when(d.dispute_by)}, the seller is paid.
+            <strong>{promise ? "The seller says it is done." : "The seller has shipped it."}</strong>{" "}
+            {promise ? "Confirm once you have seen it." : "Confirm when it arrives."} If you say nothing by {when(d.dispute_by)}, the seller is paid.
           </p>
           {note && (
             <pre className="sealed-text" id="seller-note">
@@ -426,10 +541,10 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           )}
         </>
       )}
-      {d.kind === "physical" && (d.stage === "awaiting-handover" || d.stage === "awaiting-confirmation") && !complaining && !editing && (
+      {d.kind !== "digital" && (d.stage === "awaiting-handover" || d.stage === "awaiting-confirmation") && !complaining && !editing && (
         <div className="row" style={{ marginTop: 12 }}>
           <button className="primary" id="confirm-received" disabled={busy} onClick={() => void act({ action: "confirm" })}>
-            I have received it
+            {promise ? "It has been done" : "I have received it"}
           </button>
           {d.stage === "awaiting-confirmation" && (
             <button type="button" id="complain" onClick={() => setComplaining(true)}>
@@ -438,7 +553,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           )}
         </div>
       )}
-      {complaining && d.stage === "awaiting-confirmation" && (
+      {d.kind !== "digital" && complaining && d.stage === "awaiting-confirmation" && (
         <form
           id="dispute-form"
           onSubmit={(e) => {
@@ -447,8 +562,11 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           }}
         >
           <label htmlFor="reason">What is wrong?</label>
-          <textarea id="reason" value={reason} maxLength={600} onChange={(e) => setReason(e.target.value)} placeholder="It has not arrived, or it is not what was described." />
-          <p className="hint">The seller and the operator of this site can read this. Your payment stays held until the operator decides.</p>
+          <textarea id="reason" value={reason} maxLength={600} onChange={(e) => setReason(e.target.value)} placeholder={promise ? "It was not done, or not as promised." : "It has not arrived, or it is not what was described."} />
+          <p className="hint">
+            The seller and the operator of this site can read this. Your payment stays held until the operator decides.
+            {d.buyer_bond > 0 && <> If the operator decides against you, your bond of {formatCoins(d.buyer_bond)} TAZ goes to the seller.</>}
+          </p>
           <div className="row" style={{ marginTop: 12 }}>
             <button className="primary" disabled={busy || reason.trim().length < 10}>
               Open a dispute
@@ -460,24 +578,36 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
         </form>
       )}
       {d.stage === "disputed" && (
-        <p className="small" id="dispute-open">
-          <strong>Your dispute is open.</strong> Your payment stays held until the operator decides.
-        </p>
+        <div id="dispute-open">
+          <p className="small">
+            <strong>Your dispute is open.</strong> Your payment stays held until the operator decides.
+          </p>
+          {d.dispute?.seller_reply && (
+            <p className="small" style={{ whiteSpace: "pre-wrap" }} id="seller-reply">
+              <strong>The seller answered:</strong> &ldquo;{d.dispute.seller_reply}&rdquo;
+            </p>
+          )}
+        </div>
       )}
 
       {d.resolution && (
         <p className="small" id="winner-resolution">
-          <strong className={d.resolution.decision === "refund" ? "ok" : undefined}>
-            {d.resolution.decision === "refund" ? "Your payment is coming back to you." : "Your payment went to the seller."}
-          </strong>{" "}
-          {REASON_WINNER[d.resolution.reason]}
+          <strong className={d.resolution.decision === "refund" ? "ok" : undefined}>{winnerOutcome(d.resolution, d.seller_bond + d.buyer_bond > 0)}</strong>{" "}
+          {promise && d.resolution.reason === "no-shipping-details"
+            ? "You did not say what you wanted in time."
+            : promise && d.resolution.reason === "confirmed"
+              ? "You confirmed it was done."
+              : promise && d.resolution.reason === "not-delivered"
+                ? "The seller did not do it in time."
+                : WHY_WINNER[d.resolution.reason]}
         </p>
       )}
       {d.refund && (
-        <dl className="kv">
-          <dt>Returned to you</dt>
+        <dl className="kv" id="winner-payout">
+          <dt>Sent to you</dt>
           <dd>
-            {formatCoins(d.refund.paid)} TAZ <span className="muted">(after {formatCoins(d.refund.owed - d.refund.paid)} network fee)</span>
+            {formatCoins(d.refund.paid)} TAZ{" "}
+            {d.refund.owed > d.refund.paid && <span className="muted">(after {formatCoins(d.refund.owed - d.refund.paid)} network fee)</span>}
           </dd>
           <dt>Transaction ({d.refund.status})</dt>
           <dd>{d.refund.txid.slice(0, 16)}…</dd>

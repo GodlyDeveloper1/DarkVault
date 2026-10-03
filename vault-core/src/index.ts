@@ -26,6 +26,21 @@ export const MIN_BID = 100_000; // 0.001 TAZ
 /** A payment below this is paid in full and doesn't share the fee. */
 export const FEE_SHARE_FLOOR = 4 * FEE_PER_ACTION;
 
+/** The smallest bond. Large enough to be worth returning after its share of the network fee. */
+export const MIN_BOND = 50_000; // 0.0005 TAZ
+
+/**
+ * The bond that goes with a reserve: a percentage of it, at least MIN_BOND.
+ * Sellers put one down before bidding opens; every bid carries one on top of
+ * the bid. A party who cheats, or loses a dispute they opened, forfeits theirs
+ * to the other side. `percent` 0 switches bonds off.
+ */
+export function bondFor(reserve: number, percent = 10): number {
+  assertAmount(reserve, "the reserve");
+  if (!Number.isFinite(percent) || percent <= 0) return 0;
+  return Math.max(MIN_BOND, Math.floor((reserve * percent) / 100));
+}
+
 const DOMAIN = "dark-vault/v1/bid";
 
 function assertAmount(value: number, what: string): void {
@@ -149,8 +164,8 @@ export interface Outcome {
 /**
  * Sealed-bid, first-price with a reserve.
  *
- * A bid counts if it was revealed, is no more than its deposit, and meets the
- * reserve. The highest counting bid wins and pays exactly what it bid. Ties
+ * A bid counts if it was revealed, its deposit covers the bid plus the bond,
+ * and it meets the reserve. The highest counting bid wins and pays exactly what it bid. Ties
  * go to the earlier deposit.
  *
  * The price depends on the winner's own bid and on nothing else, so nobody,
@@ -158,8 +173,9 @@ export interface Outcome {
  * just under the top one. The winner can check the price themselves: it is the
  * number they sealed.
  */
-export function decide(reserve: number, bids: SealedBid[]): Outcome {
+export function decide(reserve: number, bids: SealedBid[], bond = 0): Outcome {
   assertAmount(reserve, "the reserve");
+  assertAmount(bond, "the bond");
   const standing: Record<string, Standing> = {};
   const counting: SealedBid[] = [];
   for (const bid of bids) {
@@ -168,7 +184,7 @@ export function decide(reserve: number, bids: SealedBid[]): Outcome {
     else if (bid.revealed === undefined) standing[bid.id] = "not-revealed";
     else {
       assertAmount(bid.revealed, "a revealed bid");
-      if (bid.revealed > bid.deposit) standing[bid.id] = "underfunded";
+      if (bid.revealed + bond > bid.deposit) standing[bid.id] = "underfunded";
       else if (bid.revealed < reserve) standing[bid.id] = "below-reserve";
       else {
         standing[bid.id] = "outbid";
@@ -222,8 +238,13 @@ export interface PlannedPayment {
  * With `escrowAddress`, the price is not paid to the seller yet: it goes to
  * the auction's escrow vault and stays there until the lot is delivered (see
  * `planEscrowPayout`). Everyone else is paid exactly as before.
+ *
+ * With a `bond`, the winner's bond goes into escrow with the price, and only
+ * what they deposited above both comes back now.
  */
-export function plan(auctionId: string, sellerAddress: string, depositors: Depositor[], outcome: Outcome, escrowAddress?: string): PlannedPayment[] {
+export function plan(auctionId: string, sellerAddress: string, depositors: Depositor[], outcome: Outcome, escrowAddress?: string, bond = 0): PlannedPayment[] {
+  assertAmount(bond, "the bond");
+  if (bond > 0 && !escrowAddress) throw new Error("a bond needs an escrow vault to hold it");
   const tag = `Dark Vault ${auctionId.slice(0, 8)}`;
   const payments: PlannedPayment[] = [];
   const add = (p: Omit<PlannedPayment, "pays_fee">) => {
@@ -240,10 +261,16 @@ export function plan(auctionId: string, sellerAddress: string, depositors: Depos
     const winner = depositors.find((d) => d.id === outcome.winnerId);
     const price = outcome.price!;
     if (!winner) throw new Error("the winner has no deposit");
-    if (price > winner.deposit) throw new Error("the price is more than the winner deposited");
-    if (escrowAddress) add({ kind: "escrow", to: escrowAddress, zatoshis: price, memo: `${tag}: price, held until delivery` });
+    if (price + bond > winner.deposit) throw new Error("the price and bond are more than the winner deposited");
+    if (escrowAddress) add({ kind: "escrow", to: escrowAddress, zatoshis: price + bond, memo: `${tag}: price${bond ? " and bond" : ""}, held until delivery` });
     else add({ kind: "seller", to: sellerAddress, zatoshis: price, memo: `${tag}: sale proceeds` });
-    add({ kind: "winner-change", bidId: winner.id, to: winner.refundAddress, zatoshis: winner.deposit - price, memo: `${tag}: you won. This is your deposit above the price.` });
+    add({
+      kind: "winner-change",
+      bidId: winner.id,
+      to: winner.refundAddress,
+      zatoshis: winner.deposit - price - bond,
+      memo: `${tag}: you won. This is your deposit above the price${bond ? " and bond" : ""}.`,
+    });
   }
   for (const d of depositors) {
     if (outcome.sold && d.id === outcome.winnerId) continue;
@@ -256,24 +283,84 @@ export function plan(auctionId: string, sellerAddress: string, depositors: Depos
   return payments;
 }
 
+/** Who, if anyone, is to blame for how a delivery ended. They forfeit their bond to the other side. */
+export type Fault = "seller" | "winner" | "none";
+
+/** What an auction's escrow vault holds when it pays out. */
+export interface EscrowHeld {
+  /** Everything in the vault. */
+  total: number;
+  /** The part the seller put down before bidding opened. */
+  sellerBond: number;
+  /** The part that is the winner's bond. The rest of the total is the price. */
+  buyerBond: number;
+}
+
 /**
  * The second payout of an auction with delivery: everything the escrow vault
- * holds goes to one party. "release" pays the seller (the lot was delivered);
- * "refund" pays the winner back (it was not).
+ * holds is paid out, and nothing stays with the coordinator.
+ *
+ *                      price        seller's bond   winner's bond
+ *   release, no fault  seller       seller          winner
+ *   release, winner    seller       seller          seller   (a dispute the winner lost)
+ *   refund, seller     winner       winner          winner   (not delivered, or a dispute the seller lost)
+ *   refund, winner     winner       seller          seller   (the winner never said where to send it)
+ *   refund, no fault   winner       seller          winner
+ *   return-bond        (not sold: the seller's bond goes back to the seller)
  */
 export function planEscrowPayout(
   auctionId: string,
-  held: number,
-  decision: "release" | "refund",
+  held: EscrowHeld,
+  decision: "release" | "refund" | "return-bond",
+  fault: Fault,
   sellerAddress: string,
-  winner: { bidId: string; refundAddress: string },
+  winner?: { bidId: string; refundAddress: string },
 ): PlannedPayment[] {
-  assertAmount(held, "the held amount");
-  if (held < FEE_SHARE_FLOOR) throw new Error("the held amount is too small to pay the network fee");
+  assertAmount(held.total, "the held amount");
+  assertAmount(held.sellerBond, "the seller's bond");
+  assertAmount(held.buyerBond, "the winner's bond");
+  const price = held.total - held.sellerBond - held.buyerBond;
+  if (price < 0) throw new Error("the bonds add up to more than the escrow vault holds");
   const tag = `Dark Vault ${auctionId.slice(0, 8)}`;
-  return decision === "release"
-    ? [{ kind: "seller", to: sellerAddress, zatoshis: held, memo: `${tag}: sale proceeds, released after delivery`, pays_fee: true }]
-    : [{ kind: "escrow-refund", bidId: winner.bidId, to: winner.refundAddress, zatoshis: held, memo: `${tag}: the lot was not delivered. This is your payment, returned.`, pays_fee: true }];
+
+  let toSeller: number;
+  let toWinner: number;
+  let sellerMemo: string;
+  let winnerMemo: string;
+  if (decision === "return-bond") {
+    if (held.buyerBond !== 0) throw new Error("there is no winner's bond to hold when a lot did not sell");
+    toSeller = held.total;
+    toWinner = 0;
+    sellerMemo = `${tag}: your bond, returned`;
+    winnerMemo = "";
+  } else if (decision === "release") {
+    if (fault === "seller") throw new Error("the price can't be released to a seller who is at fault");
+    toSeller = price + held.sellerBond + (fault === "winner" ? held.buyerBond : 0);
+    toWinner = fault === "winner" ? 0 : held.buyerBond;
+    sellerMemo = `${tag}: sale proceeds${held.sellerBond ? " and your bond" : ""}${fault === "winner" && held.buyerBond ? ", and the winner's bond (they lost the dispute)" : ""}`;
+    winnerMemo = `${tag}: your bond, returned`;
+  } else {
+    toWinner = price + (fault === "winner" ? 0 : held.buyerBond) + (fault === "seller" ? held.sellerBond : 0);
+    toSeller = held.total - toWinner;
+    winnerMemo = `${tag}: the sale was undone. This is your payment, returned${fault === "seller" && held.sellerBond ? ", with the seller's bond" : ""}.`;
+    sellerMemo = fault === "winner" ? `${tag}: the sale was undone. Your bond, returned, with the winner's bond.` : `${tag}: the sale was undone. Your bond, returned.`;
+  }
+
+  // The network fee is carried by whoever receives the price. A bond going
+  // back to its owner, or to the other side, arrives in full. With no price to
+  // pay out (a bond returned on its own), that one payment carries the fee.
+  const priceToSeller = decision !== "refund";
+  const both = toSeller > 0 && toWinner > 0;
+  const payments: PlannedPayment[] = [];
+  if (toSeller > 0) payments.push({ kind: "seller", to: sellerAddress, zatoshis: toSeller, memo: sellerMemo, pays_fee: !both || priceToSeller });
+  if (toWinner > 0) {
+    if (!winner) throw new Error("the winning bid is missing");
+    payments.push({ kind: "escrow-refund", bidId: winner.bidId, to: winner.refundAddress, zatoshis: toWinner, memo: winnerMemo, pays_fee: !both || !priceToSeller });
+  }
+  if (toSeller + toWinner !== held.total) throw new Error("the escrow payout does not add up to what is held");
+  const payer = payments.find((p) => p.pays_fee);
+  if (!payer || payer.zatoshis < FEE_SHARE_FLOOR) throw new Error("the held amount is too small to pay the network fee");
+  return payments;
 }
 
 /**

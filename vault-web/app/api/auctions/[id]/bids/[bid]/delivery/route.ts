@@ -24,7 +24,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const now = Date.now();
     if (body.action === "shipping") return { error: validEnvelope(body.envelope) ? winnerShipping(auction, now, body.envelope) : "invalid shipping details" };
     if (body.action === "confirm") return { error: winnerConfirm(auction, now) };
-    if (body.action === "dispute") return { error: await winnerDispute(auction, now, { delivery_key: body.delivery_key, reason: body.reason }) };
+    if (body.action === "dispute") return { error: await winnerDispute(auction, now, { delivery_key: body.delivery_key, lot_key: body.lot_key, reason: body.reason }) };
     return { error: "unknown action" };
   });
   if (!result || result.error === "not found") return bad("not found", 404);

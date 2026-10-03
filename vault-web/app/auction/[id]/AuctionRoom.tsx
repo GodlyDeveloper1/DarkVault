@@ -29,7 +29,7 @@ const STANDING: Record<string, string> = {
   outbid: "Another bid was higher. Your deposit comes back to you.",
   "below-reserve": "Your bid was below the reserve. Your deposit comes back to you.",
   "not-revealed": "Your bid was not revealed in time, so it did not count. Your deposit comes back to you.",
-  underfunded: "Your deposit was smaller than your bid, so the bid did not count. Your deposit comes back to you.",
+  underfunded: "Your deposit did not cover your bid (and the bond, if this auction has one), so the bid did not count. Your deposit comes back to you.",
   "no-deposit": "No deposit arrived before bidding closed, so this bid did not count.",
 };
 
@@ -83,6 +83,10 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
   // The manage key stays in this browser. The site is shown a token derived from it.
   const manageKey = useRef<string | null>(null);
   const manageTok = useRef<string | null>(null);
+  // True as soon as this browser is known to hold a seller key, before the seller view has loaded.
+  const [hasKey, setHasKey] = useState(false);
+  // The bid form waits for this: the server can't know whether this browser is the seller's.
+  const [mounted, setMounted] = useState(false);
   const id = auction.id;
 
   useEffect(() => {
@@ -92,12 +96,19 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
     const hash = window.location.hash.replace(/^#/, "");
     let key = hash.startsWith("manage=") ? hash.slice(7) : null;
     try {
-      if (key) localStorage.setItem(`dv-manage-${id}`, key);
-      else key = localStorage.getItem(`dv-manage-${id}`);
+      if (key) {
+        localStorage.setItem(`dv-manage-${id}`, key);
+        // Now that this browser remembers the key, take it out of the address
+        // bar: a seller who copies the page address to share it must not hand
+        // out their seller key with it.
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      } else key = localStorage.getItem(`dv-manage-${id}`);
     } catch {
-      /* no storage: the link still works for this visit */
+      /* no storage: the key stays in the address bar and works for this visit */
     }
     manageKey.current = key && /^[0-9a-f]{64}$/.test(key) ? key : null;
+    setHasKey(manageKey.current !== null);
+    setMounted(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -130,6 +141,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
         manageTok.current ??= await manageToken(manageKey.current);
         const res = await fetch(`/api/auctions/${id}/seller`, { headers: { "x-manage-key": manageTok.current } });
         if (res.ok) setSeller((await res.json()).seller);
+        else if (res.status === 404) setHasKey(false); // not this auction's key
       } catch {
         /* next poll */
       }
@@ -173,7 +185,10 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
   const label = stateLabel(auction);
   const hasDelivery = !!auction.delivery;
   const steps = hasDelivery ? ["Sealed bids", "Reveal", "Settle", "Deliver", "Paid"] : ["Sealed bids", "Reveal", "Settle", "Paid"];
-  const stepIndex = { open: 0, revealing: 1, settling: 2, delivering: 3, settled: steps.length - 1 }[auction.state];
+  const stepIndex = { funding: -1, open: 0, revealing: 1, settling: 2, delivering: 3, settled: steps.length - 1 }[auction.state];
+  const sellerBond = auction.delivery?.seller_bond ?? 0;
+  const buyerBond = auction.delivery?.buyer_bond ?? 0;
+  const cancelled = !!auction.outcome?.cancelled;
   const paid = auction.paid === "mined" || auction.paid === "nothing-to-pay";
   const stage = auction.delivery?.stage;
 
@@ -195,6 +210,15 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
         </div>
 
         <div className="clock" id="clock">
+          {auction.state === "funding" && (
+            <>
+              <span className="muted small">Status</span>
+              <div className="big">Not open yet</div>
+              <span className="muted small">
+                Bidding opens when the seller&apos;s bond of {formatCoins(sellerBond)} TAZ has arrived. Check back in a few minutes.
+              </span>
+            </>
+          )}
           {auction.state === "open" && (
             <>
               <span className="muted small">Bidding closes in</span>
@@ -219,22 +243,40 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
             <>
               <span className="muted small">{auction.outcome?.sold ? (stage === "refunded" ? "Result" : "Sold for") : "Result"}</span>
               <div className="big">
-                {auction.outcome?.sold ? stage === "refunded" ? "Sale undone" : <span className="price">{formatCoins(auction.outcome.price!)} TAZ</span> : "Not sold"}
+                {cancelled ? (
+                  "Never opened"
+                ) : auction.outcome?.sold ? (
+                  stage === "refunded" ? (
+                    "Sale undone"
+                  ) : (
+                    <span className="price">{formatCoins(auction.outcome.price!)} TAZ</span>
+                  )
+                ) : (
+                  "Not sold"
+                )}
               </div>
               <span className="muted small">
                 {auction.outcome?.sold
                   ? stage === "refunded"
                     ? `The highest bid was ${formatCoins(auction.outcome.price!)} TAZ.`
                     : "The highest bid won and pays what it bid."
-                  : auction.outcome?.counted === 0
-                    ? "No bid met the reserve."
-                    : ""}{" "}
+                  : cancelled
+                    ? "The seller's bond did not arrive, so bidding never opened."
+                    : auction.outcome?.counted === 0
+                      ? "No bid met the reserve."
+                      : ""}{" "}
                 {auction.state === "settling"
                   ? "Waiting for deposits to confirm, then one transaction pays everyone."
                   : auction.state === "delivering"
                     ? stage === "disputed"
                       ? "Every other deposit has been returned. The price is held while a dispute is decided."
-                      : "Every other deposit has been returned. The price is held until the lot is handed over."
+                      : stage === "released"
+                        ? "Every other deposit has been returned and the lot has been handed over. The seller's payment is being sent."
+                        : stage === "refunded"
+                          ? "Every other deposit has been returned. The lot was not delivered, so the price is going back to the winner."
+                          : auction.delivery?.kind === "promise"
+                              ? "Every other deposit has been returned. The price is held until the promise is kept."
+                              : "Every other deposit has been returned. The price is held until the lot is handed over."
                     : stage === "refunded"
                       ? "The lot was not delivered, so the price went back to the winner."
                       : paid
@@ -283,11 +325,27 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
           {seller && (
             <div className="card accent" id="seller-card">
               <h3>You are the seller</h3>
+              <p className="small muted" id="seller-private">
+                <strong style={{ color: "var(--amber)" }}>Private view.</strong> This browser holds your seller key. Never share your seller link:
+                anyone who has it can act as the seller. Give bidders the public link instead.{" "}
+                <Copy text={typeof window === "undefined" ? "" : `${window.location.origin}/auction/${id}`} label="Copy the public link" />
+              </p>
+              {auction.state === "funding" && seller.bond && <BondFunding bond={seller.bond} />}
+              {seller.bond && auction.state !== "funding" && !seller.proceeds && (
+                <p className="small muted" id="bond-status" style={{ marginBottom: 8 }}>
+                  Your bond of {formatCoins(seller.bond.required)} TAZ is held. It comes back with your payment, or when the lot doesn&apos;t sell.
+                  You lose it to the winner if you don&apos;t deliver or lose a dispute.
+                </p>
+              )}
               {seller.proceeds ? (
                 <dl className="kv">
-                  <dt>Sale price</dt>
-                  <dd>{formatCoins(seller.proceeds.owed)} TAZ</dd>
-                  <dt>Sent to you, after your fee share</dt>
+                  {auction.outcome?.price != null && (
+                    <>
+                      <dt>Sale price</dt>
+                      <dd>{formatCoins(auction.outcome.price)} TAZ</dd>
+                    </>
+                  )}
+                  <dt>{auction.outcome?.sold ? "Sent to you, after network fees" : "Your bond, returned after the network fee"}</dt>
                   <dd>{formatCoins(seller.proceeds.paid)} TAZ</dd>
                   <dt>To</dt>
                   <dd>{seller.payout_address}</dd>
@@ -298,12 +356,18 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
                 </dl>
               ) : (
                 <p className="small" style={{ margin: 0 }}>
-                  {auction.state === "settled"
-                    ? auction.outcome?.sold
-                      ? "Nothing was paid to you."
-                      : "The lot did not sell, so nothing was paid to you."
+                  {auction.state === "funding"
+                    ? ""
+                    : auction.state === "settled"
+                    ? cancelled
+                      ? "Your bond did not arrive in time, so this listing never opened. If it arrives late, it is sent back to your payout address."
+                      : auction.outcome?.sold
+                        ? "Nothing was paid to you."
+                        : "The lot did not sell, so nothing was paid to you."
                     : hasDelivery
-                      ? `After the sale and the handover, the price is sent to ${seller.payout_address}.`
+                      ? stage === "released"
+                        ? `The lot is handed over. Your payment is being sent to ${seller.payout_address}; it shows here once it is on its way.`
+                        : `After the sale and the handover, the price is sent to ${seller.payout_address}.`
                       : `When the auction settles, the price is sent to ${seller.payout_address}.`}
                 </p>
               )}
@@ -317,7 +381,13 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
             <MyBid key={t.bid_id} ticket={t} view={views[t.bid_id]} auction={auction} note={revealNote[t.bid_id]} refresh={() => void refresh()} />
           ))}
 
-          {auction.state === "open" && <BidForm auction={auction} onPlaced={(all) => (setTickets(all), void refresh())} hasBids={tickets.length > 0} />}
+          {/* The seller's view offers no bid form: a seller doesn't bid on their own lot. */}
+          {auction.state === "open" && mounted && !seller && !hasKey && <BidForm auction={auction} onPlaced={(all) => (setTickets(all), void refresh())} hasBids={tickets.length > 0} />}
+          {auction.state === "open" && seller && (
+            <p className="muted small" id="seller-no-bid">
+              Bidding is switched off in your seller view. Bidders use the public link.
+            </p>
+          )}
 
           {auction.state !== "open" && tickets.length === 0 && !seller && (
             <div className="card">
@@ -361,18 +431,64 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
             </p>
             {auction.delivery && (
               <p className="muted small" style={{ margin: "10px 0 0" }} id="delivery-terms">
-                <strong style={{ color: "var(--text)" }}>{auction.delivery.kind === "digital" ? "Digital lot." : "Physical lot."}</strong> The seller is
-                not paid at the close: the price is held until the lot is handed over.{" "}
+                <strong style={{ color: "var(--text)" }}>{auction.delivery.kind === "digital" ? "Digital lot." : auction.delivery.kind === "promise" ? "A promise." : "Physical lot."}</strong> The
+                seller is not paid at the close: the price is held until {auction.delivery.kind === "promise" ? "the promise is kept" : "the lot is handed over"}.{" "}
                 {auction.delivery.kind === "digital"
                   ? "The lot was encrypted in the seller's browser. After the sale the seller's browser sends the key, sealed so only the winner can open it. If the key doesn't arrive, or doesn't open the lot, the winner is refunded."
-                  : "The winner sends shipping details sealed so only the seller can read them. If the seller doesn't ship in time, the winner is refunded; a dispute is decided by the operator."}{" "}
+                  : auction.delivery.kind === "promise"
+                    ? "The winner tells the seller what they want, sealed so only the seller can read it. If the seller doesn't do it in time, the winner is refunded; a dispute is decided by the operator."
+                    : "The winner sends shipping details sealed so only the seller can read them. If the seller doesn't ship in time, the winner is refunded; a dispute is decided by the operator."}{" "}
                 Time limits: {span(auction.delivery.deliver_seconds)} to hand over, then {span(auction.delivery.dispute_seconds)} to complain.
+              </p>
+            )}
+            {sellerBond > 0 && (
+              <p className="muted small" style={{ margin: "10px 0 0" }} id="bond-terms">
+                <strong style={{ color: "var(--text)" }}>Bonds.</strong> The seller has put down {formatCoins(sellerBond)} TAZ. Every bid carries a bond
+                of {formatCoins(buyerBond)} TAZ on top of the bid. Honest parties get theirs back. A seller who doesn&apos;t deliver, or loses a
+                dispute, loses their bond to the winner. A winner who opens a dispute and loses it, or never says where to send a posted lot,
+                loses theirs to the seller.
               </p>
             )}
           </div>
         </div>
       </div>
     </>
+  );
+}
+
+/** Shown to the seller while the listing waits for their bond. */
+function BondFunding({ bond }: { bond: NonNullable<SellerView["bond"]> }) {
+  const uri = paymentRequest(bond.address, formatCoins(bond.required));
+  const received = bond.received ?? 0;
+  return (
+    <div id="bond-funding" style={{ marginBottom: 12 }}>
+      <p className="small" style={{ marginBottom: 10 }}>
+        <strong>Fund your bond to open the auction.</strong> Send <strong>{formatCoins(bond.required)} TAZ</strong> from a shielded balance to the
+        address below, with no memo. Bidding opens when it is in a block. You get it back with your payment, or when the lot doesn&apos;t sell;
+        you lose it to the winner if you don&apos;t deliver or lose a dispute.
+      </p>
+      <div className="row" style={{ alignItems: "flex-start" }}>
+        <Qr value={uri} size={150} />
+        <div className="grow">
+          <div className="addr" id="bond-address">{bond.address}</div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <a className="btn primary sm pay-link" href={uri}>
+              Pay from wallet
+            </a>
+            <Copy text={bond.address} label="Copy address" />
+          </div>
+          <p className="hint" id="bond-received">
+            {received >= bond.required
+              ? "Received. Opening the auction…"
+              : received > 0
+                ? `${formatCoins(received)} TAZ has arrived; ${formatCoins(bond.required - received)} TAZ more is needed.`
+                : "Nothing has arrived yet."}{" "}
+            If the bond is not here by {new Date(bond.wait_until).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })},
+            the listing is cancelled.
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -467,7 +583,12 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
       </p>
       <label htmlFor="amount">Your bid (TAZ)</label>
       <input id="amount" inputMode="decimal" autoComplete="off" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={formatCoins(auction.reserve)} />
-      <p className={problem ? "hint error" : "hint"}>{problem ?? "Stays in this browser until bidding closes."}</p>
+      <p className={problem ? "hint error" : "hint"}>
+        {problem ??
+          (auction.delivery && auction.delivery.buyer_bond > 0
+            ? `Stays in this browser until bidding closes. You will deposit your bid plus a bond of ${formatCoins(auction.delivery.buyer_bond)} TAZ, which comes back unless you open a dispute and lose it.`
+            : "Stays in this browser until bidding closes.")}
+      </p>
 
       <label htmlFor="refund">Your shielded refund address</label>
       <input id="refund" className="mono" value={refund} onChange={(e) => setRefund(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
@@ -504,8 +625,10 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
 function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?: BidView; auction: PublicAuction; note?: string; refresh: () => void }) {
   const deposit = view?.deposit;
   const funded = (deposit?.total ?? 0) > 0;
-  const enough = (deposit?.counted ?? 0) >= ticket.amount;
-  const roomy = roomyDeposit(ticket.amount);
+  const bond = auction.delivery?.buyer_bond ?? 0;
+  const needed = ticket.amount + bond;
+  const enough = (deposit?.counted ?? 0) >= needed;
+  const roomy = roomyDeposit(needed);
   const uri = paymentRequest(ticket.deposit_address, formatCoins(roomy));
 
   return (
@@ -518,7 +641,8 @@ function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?
       {auction.state === "open" && !funded && (
         <>
           <p className="small" style={{ marginTop: 12 }}>
-            <strong>Now fund it.</strong> Send <strong>at least {formatCoins(ticket.amount)} TAZ</strong> from a shielded balance to the
+            <strong>Now fund it.</strong> Send <strong>at least {formatCoins(needed)} TAZ</strong>
+            {bond > 0 && <> (your bid plus the {formatCoins(bond)} TAZ bond)</>} from a shielded balance to the
             address below, with no memo. It was made for this bid alone.
           </p>
           <div className="row" style={{ alignItems: "flex-start" }}>
@@ -570,7 +694,8 @@ function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?
 
       {funded && !enough && auction.state === "open" && (
         <p className="error small" style={{ marginBottom: 0 }}>
-          Your deposit is smaller than your bid. Send the difference to the same address before bidding closes, or this bid won&apos;t count.
+          Your deposit is smaller than your bid{bond > 0 ? " plus the bond" : ""} ({formatCoins(needed)} TAZ). Send the difference to the same address
+          before bidding closes, or this bid won&apos;t count.
         </p>
       )}
       {note && <p className="error small">Couldn&apos;t reveal yet: {note}</p>}

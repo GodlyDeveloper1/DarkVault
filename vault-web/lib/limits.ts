@@ -16,6 +16,16 @@ export const LIMITS = {
   maxDurationSec: 14 * 24 * 3600,
   minRevealSec: num("VAULT_MIN_REVEAL_SEC", 5 * 60),
   maxRevealSec: 24 * 3600,
+  /** Bonds, as a percentage of the reserve (see vault-core bondFor). 0 switches bonds off. */
+  bondPercent: (() => {
+    const v = Number(process.env.VAULT_BOND_PERCENT ?? 10);
+    return Number.isFinite(v) && v >= 0 && v <= 100 ? v : 10;
+  })(),
+  /** A seller's bond can't be more than this (it is a deposit, not a sale). */
+  maxSellerBond: 1_000_000_000,
+  /** How long a new listing waits for the seller's bond before it is cancelled. */
+  bondWaitSec: num("VAULT_BOND_WAIT_SEC", 2 * 3600),
+  replyMax: 600,
   /** Delivery: the shortest and longest time limits a seller can set for the handover and for complaints. */
   minDeliverySec: num("VAULT_MIN_DELIVERY_SEC", 3600),
   maxDeliverySec: 30 * 24 * 3600,

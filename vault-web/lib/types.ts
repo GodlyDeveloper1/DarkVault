@@ -3,9 +3,10 @@
 // PRIVATE fields never leave the server except to the person they belong to:
 // a bid's refund and deposit addresses, each deposit's amount, the vault id and
 // the settlement transaction id. See lib/views.ts for what each party is shown.
-import type { DeliveryVerdict, Standing } from "vault-core";
+import type { DeliveryVerdict, Fault, Standing } from "vault-core";
 
 export type AuctionState =
+  | "funding" // listed, but not open yet: waiting for the seller's bond to arrive
   | "open" // taking sealed bids
   | "revealing" // bidding closed; bidders are revealing their amounts
   | "settling" // outcome decided; waiting for deposits to confirm, then paying out
@@ -50,6 +51,8 @@ export interface SettlementRecord {
 
 export interface OutcomeRecord {
   sold: boolean;
+  /** The seller's bond never arrived, so the auction never opened. */
+  cancelled?: boolean;
   price?: number;
   winner_bid_id?: string;
   standing: Record<string, Standing>;
@@ -66,7 +69,9 @@ export type ResolutionReason =
   | "no-shipping-details" // the winner never said where to send it
   | "wrong-key" // digital dispute: what the seller delivered doesn't open the lot
   | "key-was-right" // digital dispute: it does
-  | "operator"; // physical dispute, decided by the operator
+  | "as-described" // the winner said the lot is what was described
+  | "operator" // a dispute decided by the operator
+  | "not-sold"; // nothing was sold: the seller's bond goes back
 
 /**
  * Delivery and escrow. When a lot sells, the price is not paid to the seller:
@@ -75,7 +80,14 @@ export type ResolutionReason =
  * and can't open them.
  */
 export interface Delivery {
-  kind: "digital" | "physical";
+  /**
+   * "digital": a text or file, encrypted at listing, unlocked by a key.
+   * "physical": something posted to the winner.
+   * "promise": something the seller will do for the winner (naming rights, an
+   *   hour of their time). It runs like a physical lot: the winner sends sealed
+   *   instructions where a postal address would go, and the seller marks it done.
+   */
+  kind: "digital" | "physical" | "promise";
   /** The seller's public key. The winner seals shipping details to it. */
   seller_pub: string;
   /** Digital lots: the hash of the lot key and the size of the encrypted lot (stored in <data>/lots/). */
@@ -84,6 +96,17 @@ export interface Delivery {
   deliver_seconds: number;
   /** Seconds the winner has, after the handover, to confirm or complain. */
   dispute_seconds: number;
+  /**
+   * Bonds, in zatoshis. 0 means none.
+   * The seller funds theirs at the escrow address before bidding opens (the
+   * amount is public: it is what the seller stands to lose). Every bid carries
+   * the buyer's on top of the bid. Whoever is at fault for a failed delivery,
+   * or loses a dispute they opened, forfeits their bond to the other side.
+   */
+  seller_bond: number;
+  buyer_bond: number;
+  /** When the seller's bond was seen in a block, which opens the auction. */
+  bond_funded_at?: number;
   /** PRIVATE. The signer account that holds the price until delivery. */
   escrow_vault_id: string;
   /** PRIVATE. */
@@ -102,10 +125,22 @@ export interface Delivery {
   /** The winner must confirm or complain by this time. */
   dispute_by?: number;
   confirmed_at?: number;
-  dispute?: { at: number; reason?: string; verdict?: DeliveryVerdict };
-  resolution?: { decision: "release" | "refund"; reason: ResolutionReason; at: number };
-  /** PRIVATE txid. The second payout: the held price to the seller, or back to the winner. */
-  payout?: { txid: string; fee: number; at: number; owed: number; paid: number };
+  dispute?: {
+    at: number;
+    /** "wrong-key" is decided by the keys at once; the other two wait for the operator. */
+    kind: "wrong-key" | "not-as-described" | "physical" | "promise";
+    reason?: string;
+    verdict?: DeliveryVerdict;
+    /** PRIVATE. Digital "not as described": the lot key, handed over by the winner so the operator can open the lot. */
+    lot_key?: string;
+    /** The seller's answer to the complaint. */
+    seller_reply?: { at: number; text: string };
+  };
+  resolution?: { decision: "release" | "refund" | "return-bond"; reason: ResolutionReason; fault: Fault; at: number };
+  /** PRIVATE txid. The second payout: everything in escrow, to the seller, the winner or both. */
+  payout?: { txid: string; fee: number; at: number; owed: number; paid: number; to_seller: { owed: number; paid: number } | null; to_winner: { owed: number; paid: number } | null };
+  /** PRIVATE txids. A seller's bond that arrived after the auction was over, sent back. */
+  stray_returns?: { txid: string; at: number; paid: number }[];
 }
 
 export interface Auction {
@@ -115,6 +150,8 @@ export interface Auction {
   description: string;
   reserve: number;
   ends_at: number;
+  /** How long bidding runs once the auction opens. */
+  duration_seconds?: number;
   reveal_seconds: number;
   seller: {
     /** PRIVATE. */

@@ -4,10 +4,11 @@
 import "server-only";
 import { deliveryStage } from "./delivery";
 import { moneyByBid } from "./engine";
+import { LIMITS } from "./limits";
 import { vaultInfo, type VaultInfo } from "./signer";
 import type { Auction, Bid } from "./types";
 
-/** What the signer says about an auction's vaults. The escrow vault is asked about only once it has paid out. */
+/** What the signer says about an auction's vaults. The escrow vault is asked about only while the seller's bond is awaited and once it has paid out. */
 export interface Infos {
   info: VaultInfo | null;
   escrow: VaultInfo | null;
@@ -16,7 +17,9 @@ export interface Infos {
 export async function infosFor(auction: Auction): Promise<Infos> {
   const [info, escrow] = await Promise.all([
     vaultInfo(auction.vault_id).catch(() => null),
-    auction.delivery?.payout ? vaultInfo(auction.delivery.escrow_vault_id).catch(() => null) : Promise.resolve(null),
+    auction.delivery && (auction.delivery.payout || auction.state === "funding")
+      ? vaultInfo(auction.delivery.escrow_vault_id).catch(() => null)
+      : Promise.resolve(null),
   ]);
   return { info, escrow };
 }
@@ -34,7 +37,11 @@ function deliveryCommon(auction: Auction, escrow: VaultInfo | null) {
     dispute_by: d.dispute_by ?? null,
     handed_over_at: d.handover?.at ?? null,
     disputed: !!d.dispute,
-    resolution: d.resolution ? { decision: d.resolution.decision, reason: d.resolution.reason } : null,
+    seller_bond: d.seller_bond ?? 0,
+    buyer_bond: d.buyer_bond ?? 0,
+    /** A complaint waiting for the operator, with the seller's answer if they gave one. */
+    dispute: d.dispute ? { at: d.dispute.at, kind: d.dispute.kind ?? "physical", reason: d.dispute.reason ?? null, verdict: d.dispute.verdict ?? null, seller_reply: d.dispute.seller_reply?.text ?? null } : null,
+    resolution: d.resolution ? { decision: d.resolution.decision, reason: d.resolution.reason, fault: d.resolution.fault ?? "none" } : null,
     /** Whether the second payout has been mined. */
     paid: d.payout ? settlementStatus(escrow, d.payout.txid) : null,
   };
@@ -70,7 +77,7 @@ export function publicView(auction: Auction, { info, escrow }: Infos) {
     /** The public board: every commitment, in the order placed. */
     commitments: auction.bids.map((b) => b.commitment),
     outcome: auction.outcome
-      ? { sold: auction.outcome.sold, price: auction.outcome.price ?? null, counted: auction.outcome.counted }
+      ? { sold: auction.outcome.sold, cancelled: !!auction.outcome.cancelled, price: auction.outcome.price ?? null, counted: auction.outcome.counted }
       : null,
     /** Whether the payout transaction has been mined. The transaction itself is shown only to the people it pays. */
     paid: auction.state === "settled" ? (d?.payout ? settlementStatus(escrow, d.payout.txid) : first ? settlementStatus(info, first.txid) : "nothing-to-pay") : null,
@@ -82,6 +89,9 @@ export function publicView(auction: Auction, { info, escrow }: Infos) {
           seller_pub: d.seller_pub,
           deliver_seconds: d.deliver_seconds,
           dispute_seconds: d.dispute_seconds,
+          /** What the seller put down before bidding opened, and what every bid must carry on top of the bid. */
+          seller_bond: d.seller_bond ?? 0,
+          buyer_bond: d.buyer_bond ?? 0,
           stage: auction.outcome?.sold ? deliveryStage(auction) : null,
         }
       : null,
@@ -124,11 +134,13 @@ export function bidView(auction: Auction, bid: Bid, { info, escrow }: Infos) {
           lot: d!.lot ?? null,
           shipping_sent_at: d!.shipping?.at ?? null,
           verdict: d!.dispute?.verdict ?? null,
-          /** The held price coming back, if the lot was not delivered. */
-          refund:
-            d!.payout && d!.resolution?.decision === "refund"
-              ? { owed: d!.payout.owed, paid: d!.payout.paid, txid: d!.payout.txid, status: settlementStatus(escrow, d!.payout.txid) }
-              : null,
+          /** What the second payout sends this bidder: the price back, a bond back, the seller's bond, or nothing. */
+          refund: (() => {
+            const p = d!.payout;
+            // Records made before bonds have no split: a refund went to the winner in full.
+            const part = p ? (p.to_winner !== undefined ? p.to_winner : d!.resolution?.decision === "refund" ? { owed: p.owed, paid: p.paid } : null) : null;
+            return p && part ? { owed: part.owed, paid: part.paid, txid: p.txid, status: settlementStatus(escrow, p.txid) } : null;
+          })(),
         }
       : null,
   };
@@ -142,14 +154,28 @@ export function sellerView(auction: Auction, { info, escrow }: Infos) {
   const payments = auction.settlements.flatMap((s) =>
     s.payments.filter((p) => p.kind === "seller").map((p) => ({ owed: p.owed, paid: p.paid, txid: s.txid, status: settlementStatus(info, s.txid) })),
   );
-  // With delivery, the seller is paid by the second payout, out of escrow.
-  if (d?.payout && d.resolution?.decision === "release") {
-    payments.push({ owed: auction.outcome?.price ?? d.payout.owed, paid: d.payout.paid, txid: d.payout.txid, status: settlementStatus(escrow, d.payout.txid) });
+  // With delivery, the seller is paid by the second payout, out of escrow: the price, their bond, or both.
+  if (d?.payout) {
+    const p = d.payout;
+    const part = p.to_seller !== undefined ? p.to_seller : d.resolution?.decision === "release" ? { owed: p.owed, paid: p.paid } : null;
+    if (part) payments.push({ owed: part.owed, paid: part.paid, txid: p.txid, status: settlementStatus(escrow, p.txid) });
   }
+  // The seller's bond: where to send it, and what has arrived (only while the listing waits for it).
+  const bond =
+    d && (d.seller_bond ?? 0) > 0
+      ? {
+          required: d.seller_bond,
+          address: d.escrow_address,
+          received: auction.state === "funding" && escrow ? escrow.deposits.reduce((sum, x) => sum + x.value_zatoshis, 0) : null,
+          confirmed: !!d.bond_funded_at,
+          wait_until: auction.created_at + LIMITS.bondWaitSec * 1000,
+        }
+      : null;
   const winner = d && auction.outcome?.sold && d.started_at ? auction.bids.find((b) => b.id === auction.outcome!.winner_bid_id) : undefined;
   return {
     payout_address: mask(auction.seller.payout_address),
     proceeds: payments[0] ?? null,
+    bond,
     delivery:
       d && winner
         ? {
@@ -158,7 +184,6 @@ export function sellerView(auction: Auction, { info, escrow }: Infos) {
             winner_pub: winner.delivery_pub ?? null,
             /** Physical: the winner's shipping details, sealed to the seller. */
             shipping: d.shipping ? { at: d.shipping.at, envelope: d.shipping.envelope } : null,
-            dispute: d.dispute ? { at: d.dispute.at, reason: d.dispute.reason ?? null, verdict: d.dispute.verdict ?? null } : null,
             held: auction.outcome?.price ?? null,
           }
         : null,

@@ -840,7 +840,7 @@ a.pay-link:hover {
 }
 .seg {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 10px;
 }
 .seg label {
@@ -878,7 +878,7 @@ a.pay-link:hover {
   outline: 2px solid var(--lime);
   outline-offset: 1px;
 }
-@media (max-width: 560px) {
+@media (max-width: 720px) {
   .seg {
     grid-template-columns: 1fr;
   }

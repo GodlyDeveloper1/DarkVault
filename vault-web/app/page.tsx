@@ -7,9 +7,12 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const auctions = await Promise.all(
-    (await listAuctions()).map(async (a) => publicView(a, await infosFor(a))),
+    // A listing shows once the seller's bond has arrived: an unfunded one is not an auction yet.
+    (await listAuctions())
+      .filter((a) => a.state !== "funding" && !a.outcome?.cancelled)
+      .map(async (a) => publicView(a, await infosFor(a))),
   );
-  const rank = { open: 0, revealing: 1, settling: 2, delivering: 3, settled: 4 } as const;
+  const rank = { open: 0, revealing: 1, settling: 2, delivering: 3, funding: 4, settled: 5 } as const;
   auctions.sort((a, b) => rank[a.state] - rank[b.state] || b.created_at - a.created_at);
 
   return (

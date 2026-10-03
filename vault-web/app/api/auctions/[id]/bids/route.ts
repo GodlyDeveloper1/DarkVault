@@ -26,6 +26,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const current = await loadAuction(id);
   if (!current) return bad("not found", 404);
+  if (current.state === "funding") return bad("bidding has not opened yet: the seller's bond has not arrived");
   if (current.state !== "open" || Date.now() >= current.ends_at) return bad("bidding has closed");
   if (current.delivery && !deliveryPub) return bad("this auction needs a delivery key with every bid; please reload the page");
 

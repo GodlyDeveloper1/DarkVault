@@ -34,7 +34,7 @@ function statusOf(row: Row): { text: string; cls: string } {
   if (view?.standing === "won") {
     const stage = view.delivery?.stage;
     if (stage === "refunded") return { text: "Won, but not delivered · payment returned", cls: "" };
-    if (stage === "awaiting-address") return { text: "Won · send your shipping details", cls: "amber" };
+    if (stage === "awaiting-address") return { text: view.delivery?.kind === "promise" ? "Won · tell the seller what you want" : "Won · send your shipping details", cls: "amber" };
     if (stage === "awaiting-handover") return { text: "Won · waiting for the seller to hand over", cls: "amber" };
     if (stage === "awaiting-confirmation") return { text: "Won · confirm you have the lot", cls: "amber" };
     if (stage === "disputed") return { text: "Won · dispute open", cls: "amber" };

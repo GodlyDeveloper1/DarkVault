@@ -325,9 +325,16 @@ pub fn spawn(config: SyncConfig, status: Arc<SyncStatus>) -> mpsc::UnboundedSend
             rt.block_on(async move {
                 let cache = MemoryBlockCache::default();
                 run_sync(&config, &cache, &status).await;
+                // A ticker, not a sleep inside the loop: a sleep would start again
+                // every time a request arrived, so a steady stream of requests
+                // (a page polling every few seconds) would stop the wallet from
+                // ever scanning a new block.
+                let mut ticker = tokio::time::interval(SYNC_INTERVAL);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                ticker.tick().await; // the first tick is immediate, and we have just synced
                 loop {
                     tokio::select! {
-                        _ = tokio::time::sleep(SYNC_INTERVAL) => {
+                        _ = ticker.tick() => {
                             run_sync(&config, &cache, &status).await;
                         }
                         cmd = rx.recv() => match cmd {

@@ -1,7 +1,8 @@
 // The seller hands over: the lot key sealed to the winner (digital), or
-// "shipped", with an optional sealed note (physical).
+// "shipped", with an optional sealed note (physical). Or, with `reply`,
+// answers a complaint for the operator to read.
 import { advance } from "@/lib/engine";
-import { sellerHandover, validEnvelope } from "@/lib/delivery";
+import { sellerHandover, sellerReply, validEnvelope } from "@/lib/delivery";
 import { bad, clientKey, limited, matches, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
 import { withAuction } from "@/lib/store";
@@ -19,6 +20,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
   const result = await withAuction(id, (auction): { error: string | null } => {
     if (!matches(key, auction.seller.key_hash)) return { error: "not found" };
+    if (body.reply !== undefined) return { error: sellerReply(auction, Date.now(), body.reply) };
     if (body.envelope !== undefined && !validEnvelope(body.envelope)) return { error: "invalid envelope" };
     return { error: sellerHandover(auction, Date.now(), body.envelope as string | undefined) };
   });

@@ -265,6 +265,8 @@ import {
   sealText,
   sellerKeys,
   manageToken,
+  bondFor,
+  MIN_BOND,
 } from "../src/index.ts";
 
 const MANAGE = "5e".repeat(32);
@@ -291,13 +293,89 @@ test("escrow has no effect when the lot did not sell", () => {
   assert.deepEqual(plan(AUCTION, "utest1seller", depositors, outcome, "utest1escrow"), plan(AUCTION, "utest1seller", depositors, outcome));
 });
 
-test("the escrow payout sends everything held to exactly one party", () => {
+test("without bonds the escrow payout sends everything held to exactly one party", () => {
   const winner = { bidId: "a", refundAddress: "utest1a" };
-  const release = planEscrowPayout(AUCTION, 795_000, "release", "utest1seller", winner);
+  const held = { total: 795_000, sellerBond: 0, buyerBond: 0 };
+  const release = planEscrowPayout(AUCTION, held, "release", "none", "utest1seller", winner);
   assert.deepEqual(release.map((p) => [p.kind, p.to, p.zatoshis, p.pays_fee]), [["seller", "utest1seller", 795_000, true]]);
-  const refund = planEscrowPayout(AUCTION, 795_000, "refund", "utest1seller", winner);
+  const refund = planEscrowPayout(AUCTION, held, "refund", "seller", "utest1seller", winner);
   assert.deepEqual(refund.map((p) => [p.kind, p.bidId, p.to, p.zatoshis, p.pays_fee]), [["escrow-refund", "a", "utest1a", 795_000, true]]);
-  assert.throws(() => planEscrowPayout(AUCTION, 1000, "release", "utest1seller", winner), /too small/);
+  assert.throws(() => planEscrowPayout(AUCTION, { total: 1000, sellerBond: 0, buyerBond: 0 }, "release", "none", "utest1seller", winner), /too small/);
+});
+
+test("the bond for a reserve is a tenth of it, never less than the minimum, and can be switched off", () => {
+  assert.equal(bondFor(2_000_000), 200_000);
+  assert.equal(bondFor(200_000), MIN_BOND);
+  assert.equal(bondFor(1_234_567), 123_456);
+  assert.equal(bondFor(2_000_000, 25), 500_000);
+  assert.equal(bondFor(2_000_000, 0), 0);
+});
+
+test("with a bond, a bid counts only if its deposit covers the bid and the bond", () => {
+  const bids: SealedBid[] = [
+    { id: "exact", order: 0, deposit: 800_000, revealed: 800_000 }, // no room for the bond
+    { id: "covered", order: 1, deposit: 750_000, revealed: 700_000 },
+    { id: "one-short", order: 2, deposit: 749_999, revealed: 700_000 },
+  ];
+  const o = decide(200_000, bids, 50_000);
+  assert.deepEqual(o.standing, { exact: "underfunded", covered: "won", "one-short": "underfunded" });
+  assert.equal(o.price, 700_000);
+  // The same bids with no bond: the highest wins.
+  assert.equal(decide(200_000, bids).winnerId, "exact");
+});
+
+test("with a bond, the price and the bond go into escrow and only the rest comes back now", () => {
+  const depositors: Depositor[] = [
+    { id: "a", deposit: 900_000, refundAddress: "utest1a" },
+    { id: "b", deposit: 500_000, refundAddress: "utest1b" },
+  ];
+  const outcome = { sold: true, winnerId: "a", price: 800_000, standing: { a: "won", b: "outbid" } } as const;
+  const p = plan(AUCTION, "utest1seller", depositors, outcome, "utest1escrow", 50_000);
+  assert.deepEqual(p.map((x) => [x.kind, x.zatoshis]), [["escrow", 850_000], ["winner-change", 50_000], ["refund", 500_000]]);
+  assert.equal(p.reduce((s, x) => s + x.zatoshis, 0), 1_400_000);
+  assert.throws(() => plan(AUCTION, "utest1seller", depositors, outcome, undefined, 50_000), /needs an escrow/);
+  assert.throws(() => plan(AUCTION, "utest1seller", depositors, outcome, "utest1escrow", 150_000), /more than the winner deposited/);
+  // A winner who deposited exactly bid + bond gets nothing back now.
+  const tight = plan(AUCTION, "utest1seller", [{ id: "a", deposit: 850_000, refundAddress: "utest1a" }], { ...outcome, standing: { a: "won" } }, "utest1escrow", 50_000);
+  assert.deepEqual(tight.map((x) => [x.kind, x.zatoshis]), [["escrow", 850_000]]);
+});
+
+test("the escrow payout gives the bond of whoever is at fault to the other side", () => {
+  const winner = { bidId: "a", refundAddress: "utest1a" };
+  // Held: 800,000 price (less a fee share of 5,000 already paid) + 100,000 seller bond + 50,000 winner bond.
+  const held = { total: 945_000, sellerBond: 100_000, buyerBond: 50_000 };
+  const split = (decision: "release" | "refund", fault: "seller" | "winner" | "none") => {
+    const p = planEscrowPayout(AUCTION, held, decision, fault, "utest1seller", winner);
+    assert.equal(p.reduce((s, x) => s + x.zatoshis, 0), held.total, "everything held is paid out");
+    return { seller: p.find((x) => x.kind === "seller")?.zatoshis ?? 0, winner: p.find((x) => x.kind === "escrow-refund")?.zatoshis ?? 0 };
+  };
+  // Honest sale: the seller gets the price and their bond; the winner gets their bond back.
+  assert.deepEqual(split("release", "none"), { seller: 895_000, winner: 50_000 });
+  // The winner opened a dispute and lost: their bond goes to the seller too.
+  assert.deepEqual(split("release", "winner"), { seller: 945_000, winner: 0 });
+  // The seller didn't deliver, or lost a dispute: everything goes to the winner.
+  assert.deepEqual(split("refund", "seller"), { seller: 0, winner: 945_000 });
+  // The winner never said where to send it: they get the price back, the seller keeps both bonds.
+  assert.deepEqual(split("refund", "winner"), { seller: 150_000, winner: 795_000 });
+  // Undone with nobody to blame: each side gets their own bond.
+  assert.deepEqual(split("refund", "none"), { seller: 100_000, winner: 845_000 });
+  // The fee is carried by whoever receives the price; a bond travelling alone arrives in full.
+  const payers = (decision: "release" | "refund", fault: "seller" | "winner" | "none") =>
+    planEscrowPayout(AUCTION, held, decision, fault, "utest1seller", winner).map((p) => `${p.kind}:${p.pays_fee}`);
+  assert.deepEqual(payers("release", "none"), ["seller:true", "escrow-refund:false"]);
+  assert.deepEqual(payers("refund", "none"), ["seller:false", "escrow-refund:true"]);
+  assert.deepEqual(payers("refund", "winner"), ["seller:false", "escrow-refund:true"]);
+  assert.deepEqual(payers("refund", "seller"), ["escrow-refund:true"]);
+  assert.deepEqual(payers("release", "winner"), ["seller:true"]);
+  // A seller at fault is never paid the price.
+  assert.throws(() => planEscrowPayout(AUCTION, held, "release", "seller", "utest1seller", winner), /at fault/);
+  assert.throws(() => planEscrowPayout(AUCTION, { total: 100_000, sellerBond: 100_000, buyerBond: 50_000 }, "release", "none", "utest1seller", winner), /more than/);
+});
+
+test("a lot that did not sell returns the seller's bond and nothing else", () => {
+  const p = planEscrowPayout(AUCTION, { total: 100_000, sellerBond: 100_000, buyerBond: 0 }, "return-bond", "none", "utest1seller");
+  assert.deepEqual(p.map((x) => [x.kind, x.to, x.zatoshis, x.pays_fee]), [["seller", "utest1seller", 100_000, true]]);
+  assert.throws(() => planEscrowPayout(AUCTION, { total: 150_000, sellerBond: 100_000, buyerBond: 50_000 }, "return-bond", "none", "utest1seller"), /no winner's bond/);
 });
 
 test("a seller's keys come from the manage key alone and differ from each other", async () => {

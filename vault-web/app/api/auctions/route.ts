@@ -1,5 +1,5 @@
 // List auctions (public view) and create one.
-import { fromBase64, newId } from "vault-core";
+import { bondFor, fromBase64, newId } from "vault-core";
 import { advance } from "@/lib/engine";
 import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
@@ -11,7 +11,7 @@ import { infosFor, publicView } from "@/lib/views";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const auctions = await listAuctions();
+  const auctions = (await listAuctions()).filter((a) => a.state !== "funding" && !a.outcome?.cancelled);
   const views = await Promise.all(
     auctions.map(async (a) => publicView(a, await infosFor(a))),
   );
@@ -51,12 +51,24 @@ export async function POST(req: Request) {
   if (body.delivery !== undefined) {
     const d = body.delivery as Record<string, unknown> | null;
     if (!d || typeof d !== "object") return bad("invalid delivery");
-    if (d.kind !== "digital" && d.kind !== "physical") return bad("the lot must be digital or physical");
+    if (d.kind !== "digital" && d.kind !== "physical" && d.kind !== "promise") return bad("the lot must be digital, physical or a promise");
     if (typeof d.seller_pub !== "string" || !/^[0-9a-f]{64}$/.test(d.seller_pub)) return bad("invalid seller key");
     const within = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= LIMITS.minDeliverySec && v <= LIMITS.maxDeliverySec;
     if (!within(d.deliver_seconds) || !within(d.dispute_seconds))
       return bad(`delivery time limits are between ${Math.ceil(LIMITS.minDeliverySec / 60)} minutes and ${LIMITS.maxDeliverySec / 86400} days`);
-    delivery = { kind: d.kind, seller_pub: d.seller_pub, deliver_seconds: d.deliver_seconds, dispute_seconds: d.dispute_seconds };
+    // Bonds. The buyer's is fixed by the reserve; the seller may stake more than the minimum, never less.
+    const minBond = typeof reserve === "number" ? bondFor(reserve, LIMITS.bondPercent) : 0;
+    const sellerBond = d.seller_bond === undefined ? minBond : d.seller_bond;
+    if (typeof sellerBond !== "number" || !Number.isSafeInteger(sellerBond) || sellerBond < minBond || sellerBond > LIMITS.maxSellerBond)
+      return bad(`the seller's bond must be at least ${minBond} zatoshis`);
+    delivery = {
+      kind: d.kind,
+      seller_pub: d.seller_pub,
+      deliver_seconds: d.deliver_seconds,
+      dispute_seconds: d.dispute_seconds,
+      seller_bond: sellerBond,
+      buyer_bond: minBond,
+    };
     if (d.kind === "digital") {
       if (typeof d.key_hash !== "string" || !/^[0-9a-f]{64}$/.test(d.key_hash)) return bad("invalid lot key hash");
       try {
@@ -66,7 +78,7 @@ export async function POST(req: Request) {
       }
       // 12 bytes of nonce, a 4-byte header length, at least one byte of content, a 16-byte tag.
       if (lot.length < 33 || lot.length > LIMITS.maxLotBytes) return bad("the encrypted lot is empty or larger than 1 MB");
-      delivery.lot = { key_hash: d.key_hash, bytes: lot.length };
+      delivery!.lot = { key_hash: d.key_hash, bytes: lot.length };
     }
   }
 
@@ -90,11 +102,13 @@ export async function POST(req: Request) {
       description,
       reserve,
       ends_at: now + durationSec * 1000,
+      duration_seconds: durationSec,
       reveal_seconds: revealSec,
       seller: { payout_address: payout, key_hash: keyHash },
       vault_id: vault.vault_id,
       ...(delivery && escrow ? { delivery: { ...delivery, ...escrow } } : {}),
-      state: "open",
+      // With a bond, bidding opens when the seller's bond has arrived.
+      state: delivery && delivery.seller_bond > 0 ? "funding" : "open",
       bids: [],
       settlements: [],
     });
