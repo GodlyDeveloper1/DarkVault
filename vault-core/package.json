@@ -1,7 +1,7 @@
 {
   "name": "vault-core",
   "version": "0.1.0",
-  "description": "Dark Vault: sealed-bid commitments, second-price rules and settlement plans, for the browser and Node",
+  "description": "Dark Vault: sealed-bid commitments, first-price rules, settlement plans and sealed delivery, for the browser and Node",
   "type": "module",
   "scripts": {
     "test": "tsx --test test/core.test.ts",
@@ -15,5 +15,8 @@
   "exports": {
     ".": "./src/index.ts"
   },
-  "types": "./src/index.ts"
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@noble/curves": "^1.9.7"
+  }
 }

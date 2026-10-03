@@ -10,7 +10,9 @@ import {
   opens,
   parseCoins,
   plan,
-  settlementFee,
+  minSettlementFee,
+  bidToken,
+  sha256Hex,
   type Depositor,
   type SealedBid,
 } from "../src/index.ts";
@@ -65,25 +67,24 @@ test("commit refuses malformed input", async () => {
 
 const bid = (id: string, order: number, deposit: number, revealed?: number): SealedBid => ({ id, order, deposit, revealed });
 
-test("the highest bid wins and pays the second-highest", () => {
+test("the highest bid wins and pays what it bid", () => {
   const o = decide(100_000, [bid("a", 0, 900_000, 800_000), bid("b", 1, 600_000, 500_000), bid("c", 2, 300_000, 300_000)]);
   assert.equal(o.sold, true);
   assert.equal(o.winnerId, "a");
-  assert.equal(o.price, 500_000);
-  assert.equal(o.priceSetBy, "b");
+  assert.equal(o.price, 800_000);
   assert.deepEqual(o.standing, { a: "won", b: "outbid", c: "outbid" });
 });
 
-test("a single bid pays the reserve", () => {
+test("a single bid still pays what it bid, not the reserve", () => {
   const o = decide(250_000, [bid("a", 0, 900_000, 800_000)]);
-  assert.equal(o.price, 250_000);
-  assert.equal(o.priceSetBy, undefined);
+  assert.equal(o.winnerId, "a");
+  assert.equal(o.price, 800_000);
 });
 
-test("a second bid below the reserve does not set the price", () => {
+test("a bid below the reserve cannot win", () => {
   const o = decide(250_000, [bid("a", 0, 900_000, 800_000), bid("b", 1, 200_000, 200_000)]);
   assert.equal(o.winnerId, "a");
-  assert.equal(o.price, 250_000);
+  assert.equal(o.price, 800_000);
   assert.equal(o.standing.b, "below-reserve");
 });
 
@@ -107,17 +108,21 @@ test("bids that were not revealed, not funded or underfunded do not count", () =
     bid("honest", 3, 400_000, 350_000),
   ]);
   assert.equal(o.winnerId, "honest");
-  assert.equal(o.price, 100_000);
+  assert.equal(o.price, 350_000);
   assert.deepEqual(o.standing, { unrevealed: "not-revealed", nodeposit: "no-deposit", underfunded: "underfunded", honest: "won" });
 });
 
-test("bidding your true value is never beaten by bidding lower (second price)", () => {
-  // Against a rival at 500k, a bidder who values the lot at 800k pays 500k
-  // whether they bid 800k or 600k, and loses the lot if they bid 400k.
-  const rival = bid("rival", 0, 500_000, 500_000);
-  assert.equal(decide(100_000, [rival, bid("me", 1, 800_000, 800_000)]).price, 500_000);
-  assert.equal(decide(100_000, [rival, bid("me", 1, 800_000, 600_000)]).price, 500_000);
-  assert.equal(decide(100_000, [rival, bid("me", 1, 800_000, 400_000)]).winnerId, "rival");
+test("no other bid can change what the winner pays", () => {
+  // A fake bid placed just under the top one (by a seller, say) changes nothing:
+  // the winner pays their own bid whatever else is on the board.
+  const me = bid("me", 1, 800_000, 800_000);
+  assert.equal(decide(100_000, [me]).price, 800_000);
+  assert.equal(decide(100_000, [bid("rival", 0, 500_000, 500_000), me]).price, 800_000);
+  assert.equal(decide(100_000, [bid("shill", 0, 799_999, 799_999), me]).price, 800_000);
+  // A higher fake bid wins the lot itself and has to pay for it in full.
+  const o = decide(100_000, [bid("shill", 0, 900_000, 900_000), me]);
+  assert.equal(o.winnerId, "shill");
+  assert.equal(o.price, 900_000);
 });
 
 const who = (id: string, deposit: number): Depositor => ({ id, deposit, refundAddress: `utest1refund${id}` });
@@ -130,8 +135,8 @@ test("a sale pays the seller the price, the winner their excess and everyone els
   assert.deepEqual(
     p.map((x) => [x.kind, x.to, x.zatoshis]),
     [
-      ["seller", "utest1seller", 500_000],
-      ["winner-change", "utest1refunda", 400_000],
+      ["seller", "utest1seller", 800_000],
+      ["winner-change", "utest1refunda", 100_000],
       ["refund", "utest1refundb", 600_000],
       ["refund", "utest1refundc", 300_000],
     ],
@@ -155,8 +160,8 @@ test("a winner who deposited exactly the price gets no change payment", () => {
 });
 
 test("a tiny change payment is paid in full and carries no fee share", () => {
-  const outcome = decide(100_000, [bid("a", 0, 500_001, 500_001), bid("b", 1, 500_000, 500_000)]);
-  const p = plan(AUCTION, "utest1seller", [who("a", 500_001), who("b", 500_000)], outcome);
+  const outcome = decide(100_000, [bid("a", 0, 500_001, 500_000), bid("b", 1, 400_000, 400_000)]);
+  const p = plan(AUCTION, "utest1seller", [who("a", 500_001), who("b", 400_000)], outcome);
   const change = p.find((x) => x.kind === "winner-change")!;
   assert.equal(change.zatoshis, 1);
   assert.equal(change.pays_fee, false);
@@ -207,10 +212,24 @@ test("the plan refuses an outcome that doesn't fit the deposits", () => {
   assert.throws(() => plan(AUCTION, "utest1seller", [who("a", 100_000)], { sold: true, winnerId: "zz", price: 50_000, standing: {} }));
 });
 
-test("the fee is 5,000 zat per action, at least two", () => {
-  assert.equal(settlementFee(1, 1), 10_000);
-  assert.equal(settlementFee(3, 4), 20_000);
-  assert.equal(settlementFee(6, 2), 30_000);
+test("the least fee is 5,000 zat per action, at least two", () => {
+  assert.equal(minSettlementFee(1, 1), 10_000);
+  assert.equal(minSettlementFee(3, 4), 20_000);
+  assert.equal(minSettlementFee(6, 2), 30_000);
+});
+
+test("a bid token is derived from the nonce and gives nothing away about the amount", async () => {
+  const nonce = newNonce();
+  const token = await bidToken(nonce);
+  assert.match(token, /^[0-9a-f]{64}$/);
+  assert.equal(token, await bidToken(nonce));
+  assert.notEqual(token, await bidToken(newNonce()));
+  assert.notEqual(token, nonce);
+  // It can't be used to open the commitment: it is not the nonce.
+  const c = await commit(AUCTION, 700_000, nonce);
+  assert.equal(await opens(AUCTION, c, 700_000, token), false);
+  assert.equal(await sha256Hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  await assert.rejects(bidToken("short"));
 });
 
 test("coin amounts parse and print without rounding", () => {
@@ -225,4 +244,145 @@ test("coin amounts parse and print without rounding", () => {
   assert.equal(formatCoins(100_000_000), "1");
   assert.equal(formatCoins(1), "0.00000001");
   assert.equal(formatCoins(0), "0");
+});
+
+// ---------------------------------------------------------------------------
+// Escrow and delivery
+// ---------------------------------------------------------------------------
+import {
+  decryptLot,
+  deliveryContext,
+  deliveryPublic,
+  encryptLot,
+  judgeDigitalDelivery,
+  lotKeyHash,
+  MAX_LOT_BYTES,
+  newDeliveryKey,
+  open,
+  openText,
+  planEscrowPayout,
+  seal,
+  sealText,
+  sellerKeys,
+  manageToken,
+} from "../src/index.ts";
+
+const MANAGE = "5e".repeat(32);
+const bytes = (t: string) => new TextEncoder().encode(t);
+
+test("with escrow the price goes to the escrow vault and nobody else's payment changes", () => {
+  const depositors: Depositor[] = [
+    { id: "a", deposit: 900_000, refundAddress: "utest1a" },
+    { id: "b", deposit: 500_000, refundAddress: "utest1b" },
+  ];
+  const outcome = { sold: true, winnerId: "a", price: 800_000, standing: { a: "won", b: "outbid" } } as const;
+  const direct = plan(AUCTION, "utest1seller", depositors, outcome);
+  const held = plan(AUCTION, "utest1seller", depositors, outcome, "utest1escrow");
+  assert.equal(held.length, direct.length);
+  assert.deepEqual(held[0], { ...direct[0], kind: "escrow", to: "utest1escrow", memo: held[0]!.memo });
+  assert.ok(!held.some((p) => p.to === "utest1seller"), "the seller is not paid yet");
+  assert.deepEqual(held.slice(1), direct.slice(1));
+  assert.equal(held.reduce((s, p) => s + p.zatoshis, 0), 1_400_000);
+});
+
+test("escrow has no effect when the lot did not sell", () => {
+  const depositors: Depositor[] = [{ id: "a", deposit: 300_000, refundAddress: "utest1a" }];
+  const outcome = { sold: false, standing: { a: "below-reserve" } } as const;
+  assert.deepEqual(plan(AUCTION, "utest1seller", depositors, outcome, "utest1escrow"), plan(AUCTION, "utest1seller", depositors, outcome));
+});
+
+test("the escrow payout sends everything held to exactly one party", () => {
+  const winner = { bidId: "a", refundAddress: "utest1a" };
+  const release = planEscrowPayout(AUCTION, 795_000, "release", "utest1seller", winner);
+  assert.deepEqual(release.map((p) => [p.kind, p.to, p.zatoshis, p.pays_fee]), [["seller", "utest1seller", 795_000, true]]);
+  const refund = planEscrowPayout(AUCTION, 795_000, "refund", "utest1seller", winner);
+  assert.deepEqual(refund.map((p) => [p.kind, p.bidId, p.to, p.zatoshis, p.pays_fee]), [["escrow-refund", "a", "utest1a", 795_000, true]]);
+  assert.throws(() => planEscrowPayout(AUCTION, 1000, "release", "utest1seller", winner), /too small/);
+});
+
+test("a seller's keys come from the manage key alone and differ from each other", async () => {
+  const a = await sellerKeys(MANAGE);
+  const b = await sellerKeys(MANAGE);
+  assert.equal(a.publicKey, b.publicKey);
+  assert.deepEqual(a.lotKey, b.lotKey);
+  assert.notEqual(a.privateKey, Buffer.from(a.lotKey).toString("hex"));
+  assert.notEqual((await sellerKeys("5f".repeat(32))).publicKey, a.publicKey);
+  await assert.rejects(() => sellerKeys("short"));
+  // The stored hash is not the plain SHA-256 of the key.
+  const { createHash } = await import("node:crypto");
+  assert.notEqual(await lotKeyHash(a.lotKey), createHash("sha256").update(a.lotKey).digest("hex"));
+});
+
+test("an envelope opens only with the recipient's key, for the same context, unaltered", async () => {
+  const key = newDeliveryKey();
+  const pub = deliveryPublic(key);
+  const ctx = deliveryContext(AUCTION, "shipping");
+  const env = await sealText(pub, "12 Example Street", ctx);
+  assert.equal(await openText(key, env, ctx), "12 Example Street");
+  assert.notEqual(env, await sealText(pub, "12 Example Street", ctx), "sealing twice gives different envelopes");
+  await assert.rejects(() => openText(newDeliveryKey(), env, ctx), "another key");
+  await assert.rejects(() => openText(key, env, deliveryContext(AUCTION, "note")), "another purpose");
+  await assert.rejects(() => openText(key, env, deliveryContext("ff".repeat(16), "shipping")), "another auction");
+  const raw = Buffer.from(env, "base64");
+  raw[raw.length - 1]! ^= 1;
+  await assert.rejects(() => openText(key, raw.toString("base64"), ctx), "altered");
+  await assert.rejects(() => openText(key, "AAAA", ctx), "too short");
+  assert.ok(!env.includes("Example"));
+});
+
+test("a lot round-trips, hides its name, and fails with the wrong key", async () => {
+  const { lotKey } = await sellerKeys(MANAGE);
+  const sealed = await encryptLot(lotKey, { kind: "file", name: "licence.txt", type: "text/plain" }, bytes("KEY-1234-ABCD"));
+  assert.ok(!Buffer.from(sealed).toString("latin1").includes("licence"));
+  const back = await decryptLot(lotKey, sealed);
+  assert.deepEqual(back.header, { kind: "file", name: "licence.txt", type: "text/plain" });
+  assert.equal(new TextDecoder().decode(back.content), "KEY-1234-ABCD");
+  const wrong = (await sellerKeys("5f".repeat(32))).lotKey;
+  await assert.rejects(() => decryptLot(wrong, sealed));
+  await assert.rejects(() => encryptLot(lotKey, { kind: "text" }, new Uint8Array(0)), /empty/);
+  await assert.rejects(() => encryptLot(lotKey, { kind: "text" }, new Uint8Array(MAX_LOT_BYTES + 1)), /larger/);
+});
+
+test("a dispute over a digital lot is decided by the keys, not by anyone's word", async () => {
+  const seller = await sellerKeys(MANAGE);
+  const lot = await encryptLot(seller.lotKey, { kind: "text" }, bytes("the secret"));
+  const keyHash = await lotKeyHash(seller.lotKey);
+  const winnerKey = newDeliveryKey();
+  const winnerPub = deliveryPublic(winnerKey);
+  const ctx = deliveryContext(AUCTION, "lot-key");
+  const base = { auctionId: AUCTION, deliveryKey: winnerKey, deliveryPublic: winnerPub, keyHash, lot };
+
+  // Honest seller, lying winner.
+  const good = await seal(winnerPub, seller.lotKey, ctx);
+  assert.equal(await judgeDigitalDelivery({ ...base, envelope: good }), "key-was-right");
+  // The winner's own check gives the same answer.
+  assert.equal(new TextDecoder().decode((await decryptLot(await open(winnerKey, good, ctx), lot)).content), "the secret");
+
+  // The seller sends a different key.
+  const other = (await sellerKeys("5f".repeat(32))).lotKey;
+  assert.equal(await judgeDigitalDelivery({ ...base, envelope: await seal(winnerPub, other, ctx) }), "seller-cheated");
+  // The seller seals the right key to someone else.
+  assert.equal(await judgeDigitalDelivery({ ...base, envelope: await seal(deliveryPublic(newDeliveryKey()), seller.lotKey, ctx) }), "seller-cheated");
+  // The seller sends rubbish.
+  assert.equal(await judgeDigitalDelivery({ ...base, envelope: "AAAA" }), "seller-cheated");
+  // The listing's hash matches the key, but the uploaded lot was never encrypted with it.
+  const junk = await encryptLot(other, { kind: "text" }, bytes("x"));
+  assert.equal(await judgeDigitalDelivery({ ...base, envelope: good, lot: junk }), "seller-cheated");
+
+  // A winner can't dispute with a key that isn't the one their bid registered.
+  assert.equal(await judgeDigitalDelivery({ ...base, envelope: good, deliveryKey: newDeliveryKey() }), "not-your-key");
+  assert.equal(await judgeDigitalDelivery({ ...base, envelope: good, deliveryKey: "nonsense" }), "not-your-key");
+});
+
+test("the manage token proves ownership without giving away the seller's keys", async () => {
+  const token = await manageToken(MANAGE);
+  assert.match(token, /^[0-9a-f]{64}$/);
+  assert.equal(token, await manageToken(MANAGE));
+  assert.notEqual(token, MANAGE);
+  const keys = await sellerKeys(MANAGE);
+  assert.notEqual(token, keys.privateKey);
+  assert.notEqual(token, Buffer.from(keys.lotKey).toString("hex"));
+  // The token alone gives different keys from the manage key: it can't stand in for it.
+  assert.notEqual((await sellerKeys(token)).publicKey, keys.publicKey);
+  await assert.rejects(() => manageToken("short"));
 });

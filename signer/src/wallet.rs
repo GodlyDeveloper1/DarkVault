@@ -265,7 +265,11 @@ pub struct VaultInfo {
     pub balance_total_zatoshis: u64,
     pub balance_spendable_zatoshis: u64,
     pub deposits: Vec<Deposit>,
+    /// The most recent settlement, if any.
     pub settlement: Option<Settlement>,
+    /// Every settlement, oldest first. There is more than one only when money
+    /// arrived after the first (a late deposit, returned in a later settlement).
+    pub settlements: Vec<Settlement>,
 }
 
 pub enum Command {
@@ -293,7 +297,11 @@ pub enum Command {
 struct VaultRecord {
     account_index: u32,
     birthday_height: u32,
+    /// Oldest first. Usually one; see `VaultInfo::settlements`.
     #[serde(default)]
+    settlements: Vec<SettlementRecord>,
+    /// Read from files written before `settlements` existed.
+    #[serde(default, skip_serializing)]
     settlement: Option<SettlementRecord>,
 }
 
@@ -663,10 +671,16 @@ fn house_account(config: &SyncConfig, db: &Db) -> anyhow::Result<Option<AccountU
 }
 
 fn load_vaults(config: &SyncConfig) -> BTreeMap<String, VaultRecord> {
-    std::fs::read_to_string(&config.vaults_path)
+    let mut vaults: BTreeMap<String, VaultRecord> = std::fs::read_to_string(&config.vaults_path)
         .ok()
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for record in vaults.values_mut() {
+        if let Some(old) = record.settlement.take() {
+            record.settlements.insert(0, old);
+        }
+    }
+    vaults
 }
 
 fn save_vaults(config: &SyncConfig, vaults: &BTreeMap<String, VaultRecord>) -> anyhow::Result<()> {
@@ -754,7 +768,7 @@ async fn create_vault(config: &SyncConfig) -> anyhow::Result<NewVault> {
     let mut vaults = load_vaults(config);
     vaults.insert(
         vault_id.clone(),
-        VaultRecord { account_index, birthday_height, settlement: None },
+        VaultRecord { account_index, birthday_height, settlements: vec![], settlement: None },
     );
     save_vaults(config, &vaults)?;
     println!("vault {vault_id} opened (account {account_index}, birthday {birthday_height})");
@@ -767,7 +781,7 @@ async fn create_vault(config: &SyncConfig) -> anyhow::Result<NewVault> {
 /// (which would show the amount moved on the public chain).
 fn new_address(config: &SyncConfig, vault_id: &str) -> anyhow::Result<String> {
     let record = vault_record(config, vault_id)?;
-    if record.settlement.is_some() {
+    if !record.settlements.is_empty() {
         return Err(anyhow!("vault {vault_id} has been settled; it takes no new deposits"));
     }
     let mut db = open_db(config)?;
@@ -844,16 +858,21 @@ fn transaction_status(config: &SyncConfig, txid: &str) -> anyhow::Result<(String
     })
 }
 
-fn settlement_of(config: &SyncConfig, record: &VaultRecord) -> anyhow::Result<Option<Settlement>> {
-    let Some(s) = &record.settlement else { return Ok(None) };
-    let (status, mined_height) = transaction_status(config, &s.txid)?;
-    Ok(Some(Settlement {
-        txid: s.txid.clone(),
-        status,
-        mined_height,
-        fee_zatoshis: s.fee_zatoshis,
-        payments: s.payments.clone(),
-    }))
+fn settlements_of(config: &SyncConfig, record: &VaultRecord) -> anyhow::Result<Vec<Settlement>> {
+    record
+        .settlements
+        .iter()
+        .map(|s| {
+            let (status, mined_height) = transaction_status(config, &s.txid)?;
+            Ok(Settlement {
+                txid: s.txid.clone(),
+                status,
+                mined_height,
+                fee_zatoshis: s.fee_zatoshis,
+                payments: s.payments.clone(),
+            })
+        })
+        .collect()
 }
 
 fn vault_info(config: &SyncConfig, status: &SyncStatus, vault_id: &str) -> anyhow::Result<VaultInfo> {
@@ -870,6 +889,7 @@ fn vault_info(config: &SyncConfig, status: &SyncStatus, vault_id: &str) -> anyho
         })
         .unwrap_or((0, 0));
     let scanned = status.scanned_height.load(Ordering::Relaxed);
+    let mut settlements = settlements_of(config, &record)?;
     Ok(VaultInfo {
         vault_id: vault_id.to_string(),
         birthday_height: record.birthday_height,
@@ -879,7 +899,14 @@ fn vault_info(config: &SyncConfig, status: &SyncStatus, vault_id: &str) -> anyho
         balance_total_zatoshis: total,
         balance_spendable_zatoshis: spendable,
         deposits: read_deposits(config, account, scanned)?,
-        settlement: settlement_of(config, &record)?,
+        settlement: settlements.last().map(|s| Settlement {
+            txid: s.txid.clone(),
+            status: s.status.clone(),
+            mined_height: s.mined_height,
+            fee_zatoshis: s.fee_zatoshis,
+            payments: s.payments.clone(),
+        }),
+        settlements: std::mem::take(&mut settlements),
     })
 }
 
@@ -936,7 +963,9 @@ fn apply_fee(payments: &[SettlePayment], fee: u64) -> anyhow::Result<Vec<u64>> {
 ///   with the coordinator, and nothing is paid that wasn't deposited;
 /// - every deposit is confirmed enough to spend;
 /// - the transaction stays inside one shielded pool;
-/// - a vault settles once (again only if the first transaction expired unmined).
+/// - one settlement at a time: a new one is refused while the last is waiting to
+///   be mined. After that, a vault can settle again only if it holds money
+///   again (a deposit that arrived late), and the same rules apply.
 #[allow(deprecated)]
 async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment]) -> anyhow::Result<Settlement> {
     let mut vaults = load_vaults(config);
@@ -944,12 +973,15 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
         .get(vault_id)
         .cloned()
         .ok_or_else(|| anyhow!("unknown vault {vault_id}"))?;
-    if let Some(previous) = &record.settlement {
+    if let Some(previous) = record.settlements.last() {
         let (status, _) = transaction_status(config, &previous.txid)?;
-        if status != "expired" {
-            return Err(anyhow!("vault {vault_id} is already settled (transaction {})", previous.txid));
+        if status == "pending" {
+            return Err(anyhow!(
+                "vault {vault_id} has a settlement waiting to be mined (transaction {}); it can't settle again yet",
+                previous.txid
+            ));
         }
-        println!("vault {vault_id}: settlement {} expired unmined; settling again", previous.txid);
+        println!("vault {vault_id}: last settlement {} is {status}; settling what the vault holds now", previous.txid);
     }
 
     if payments.is_empty() {
@@ -996,20 +1028,22 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
         SplitPolicy::with_min_output_value(NonZeroUsize::new(1).unwrap(), Zatoshis::from_u64(10_000_000)?),
     );
 
-    // ZIP 317: 5000 zat per action, at least two actions; with every note
-    // spent and no change, the actions are the larger of inputs and outputs.
-    // The fee comes out of the payments marked `pays_fee`, so the right fee is
-    // the one for which the proposal balances with no change left over.
-    let expected = 5_000 * (deposits.max(payments.len()).max(2) as u64);
-    let candidates = [expected, expected + 5_000, expected.saturating_sub(5_000).max(10_000), expected + 10_000];
+    // ZIP 317 charges 5000 zat per action. With every note spent and no change,
+    // a transaction needs at least max(inputs, outputs, 2) actions, and the
+    // library may pad it with dummy actions for privacy. The fee comes out of
+    // the payments marked `pays_fee`, so the right fee is the smallest one for
+    // which the proposal balances with nothing left over: start at the lower
+    // bound and go up one action at a time.
+    let lower_bound = 5_000 * (deposits.max(payments.len()).max(2) as u64);
     let mut chosen = None;
     let mut last_problem = String::from("no fee was tried");
-    for fee in candidates {
+    for extra_actions in 0..=64u64 {
+        let fee = lower_bound + 5_000 * extra_actions;
         let amounts = match apply_fee(payments, fee) {
             Ok(a) => a,
             Err(e) => {
                 last_problem = format!("{e:#}");
-                continue;
+                break;
             }
         };
         let mut requested = Vec::with_capacity(payments.len());
@@ -1028,7 +1062,7 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
             );
         }
         let request = TransactionRequest::new(requested).map_err(|e| anyhow!("invalid request: {e:?}"))?;
-        match propose_transfer(
+        let attempt: Result<_, TransferError> = propose_transfer(
             &mut db,
             &TestNetwork,
             account,
@@ -1039,7 +1073,8 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
             &SpendPolicy::default(),
             None,
             None,
-        ) {
+        );
+        match attempt {
             Ok(proposal) => {
                 let step = proposal.steps().first();
                 let required = step.balance().fee_required().into_u64();
@@ -1050,8 +1085,10 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
                 }
                 last_problem = format!("with a {fee} zat fee the proposal needs {required} zat and leaves {change} zat of change");
             }
+            // Usually "insufficient funds": the fee for this many actions is
+            // too low. Try one more action; the last problem is reported if
+            // nothing balances.
             Err(e) => {
-                let e: TransferError = e;
                 last_problem = format!("with a {fee} zat fee: {e}");
             }
         }
@@ -1096,7 +1133,7 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
         .map(|(p, amount)| PaidOut { to: p.to.trim().to_string(), zatoshis: *amount })
         .collect();
     if let Some(r) = vaults.get_mut(vault_id) {
-        r.settlement = Some(SettlementRecord { txid: txid.to_string(), fee_zatoshis: fee, payments: paid.clone() });
+        r.settlements.push(SettlementRecord { txid: txid.to_string(), fee_zatoshis: fee, payments: paid.clone() });
     }
     save_vaults(config, &vaults)?;
     println!("vault {vault_id} settled in {txid}: {} payments, fee {fee} zat, pool {}", paid.len(), pools[0]);

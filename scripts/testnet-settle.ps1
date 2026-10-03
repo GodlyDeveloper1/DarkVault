@@ -16,7 +16,7 @@ param(
   [string]$Bidder = "http://127.0.0.1:8081",
   [long]$DepositA = 300000,   # the winning bidder deposits 0.003 TAZ
   [long]$DepositB = 200000,   # the other bidder deposits 0.002 TAZ
-  [long]$Price = 200000       # the winner pays the second price
+  [long]$Price = 200000       # what the winner pays the seller
 )
 
 $ErrorActionPreference = "Stop"

@@ -23,3 +23,6 @@ next-env.d.ts
 .idea/
 .DS_Store
 Thumbs.db
+
+# Test scripts being reworked
+.e2e-draft/

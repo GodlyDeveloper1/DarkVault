@@ -1,11 +1,13 @@
 // Dark Vault rules, shared by the browser and the server.
 //
-// Three things live here, and nothing that touches keys or the network:
+// Four things live here, and nothing that touches the network or coins:
 //
 //   1. Sealing a bid: a commitment that hides the amount until it is revealed.
-//   2. Deciding an auction: who wins and what they pay (second price).
+//   2. Deciding an auction: who wins and what they pay (their own bid).
 //   3. Planning the settlement: who is paid what, adding up to exactly what was
 //      deposited.
+//   4. Delivery (delivery.ts): sealing a lot and shipping details so the site
+//      can pass them on without reading them.
 //
 // Amounts are whole zatoshis (1 TAZ = 100,000,000 zat) held in ordinary
 // numbers; every amount is checked to be a safe integer.
@@ -86,6 +88,32 @@ export async function opens(auctionId: string, commitment: string, amount: numbe
   }
 }
 
+/** SHA-256 of a piece of text, as hex. */
+export async function sha256Hex(text: string): Promise<string> {
+  return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))));
+}
+
+/**
+ * The token a bidder shows to see their own bid's status. It is derived from
+ * the nonce, so the nonce is the only thing a bidder has to keep, and it says
+ * nothing about the amount. The server stores only the token's hash.
+ */
+export async function bidToken(nonce: string): Promise<string> {
+  fromHex(nonce, 32, "the nonce");
+  return sha256Hex(`dark-vault/v1/token:${nonce}`);
+}
+
+/**
+ * What a seller shows the site to prove an auction is theirs. It is derived
+ * from the manage key in their link, so the manage key itself never leaves the
+ * browser: the seller's delivery keys come from it (see delivery.ts), and a
+ * site that saw it could read the lot. The server stores only this token's hash.
+ */
+export async function manageToken(manageKey: string): Promise<string> {
+  fromHex(manageKey, 32, "the manage key");
+  return sha256Hex(`dark-vault/v1/manage-token:${manageKey}`);
+}
+
 // ---------------------------------------------------------------------------
 // 2. Deciding an auction
 // ---------------------------------------------------------------------------
@@ -112,23 +140,23 @@ export type Standing =
 export interface Outcome {
   sold: boolean;
   winnerId?: string;
-  /** What the winner pays: the second-highest valid bid, or the reserve. */
+  /** What the winner pays: exactly what they bid. */
   price?: number;
-  /** The bid that set the price, when one did (absent when the reserve set it). */
-  priceSetBy?: string;
   /** Why each bid ended where it did. */
   standing: Record<string, Standing>;
 }
 
 /**
- * Sealed-bid, second-price (Vickrey) with a reserve.
+ * Sealed-bid, first-price with a reserve.
  *
  * A bid counts if it was revealed, is no more than its deposit, and meets the
- * reserve. The highest counting bid wins and pays the second-highest counting
- * bid, or the reserve if there is no other. Ties go to the earlier deposit.
+ * reserve. The highest counting bid wins and pays exactly what it bid. Ties
+ * go to the earlier deposit.
  *
- * Paying the second price means the best strategy is to bid what the lot is
- * worth to you: bidding lower can only lose the lot, never lower the price.
+ * The price depends on the winner's own bid and on nothing else, so nobody,
+ * the seller and the coordinator included, can raise it by placing a fake bid
+ * just under the top one. The winner can check the price themselves: it is the
+ * number they sealed.
  */
 export function decide(reserve: number, bids: SealedBid[]): Outcome {
   assertAmount(reserve, "the reserve");
@@ -151,15 +179,8 @@ export function decide(reserve: number, bids: SealedBid[]): Outcome {
   counting.sort((a, b) => b.revealed! - a.revealed! || a.order - b.order);
   const winner = counting[0];
   if (!winner) return { sold: false, standing };
-  const runnerUp = counting[1];
   standing[winner.id] = "won";
-  return {
-    sold: true,
-    winnerId: winner.id,
-    price: runnerUp ? runnerUp.revealed! : reserve,
-    priceSetBy: runnerUp?.id,
-    standing,
-  };
+  return { sold: true, winnerId: winner.id, price: winner.revealed!, standing };
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +194,11 @@ export interface Depositor {
 }
 
 export interface PlannedPayment {
-  kind: "seller" | "winner-change" | "refund";
+  /**
+   * "escrow": the price, held until the lot is delivered.
+   * "escrow-refund": the held price going back to the winner because delivery failed.
+   */
+  kind: "seller" | "winner-change" | "refund" | "escrow" | "escrow-refund";
   /** The bid this payment belongs to. Absent for the seller. */
   bidId?: string;
   to: string;
@@ -193,8 +218,12 @@ export interface PlannedPayment {
  *
  * The network fee (5,000 zat per payment) is shared equally by the payments,
  * except payments too small to carry a share.
+ *
+ * With `escrowAddress`, the price is not paid to the seller yet: it goes to
+ * the auction's escrow vault and stays there until the lot is delivered (see
+ * `planEscrowPayout`). Everyone else is paid exactly as before.
  */
-export function plan(auctionId: string, sellerAddress: string, depositors: Depositor[], outcome: Outcome): PlannedPayment[] {
+export function plan(auctionId: string, sellerAddress: string, depositors: Depositor[], outcome: Outcome, escrowAddress?: string): PlannedPayment[] {
   const tag = `Dark Vault ${auctionId.slice(0, 8)}`;
   const payments: PlannedPayment[] = [];
   const add = (p: Omit<PlannedPayment, "pays_fee">) => {
@@ -212,7 +241,8 @@ export function plan(auctionId: string, sellerAddress: string, depositors: Depos
     const price = outcome.price!;
     if (!winner) throw new Error("the winner has no deposit");
     if (price > winner.deposit) throw new Error("the price is more than the winner deposited");
-    add({ kind: "seller", to: sellerAddress, zatoshis: price, memo: `${tag}: sale proceeds` });
+    if (escrowAddress) add({ kind: "escrow", to: escrowAddress, zatoshis: price, memo: `${tag}: price, held until delivery` });
+    else add({ kind: "seller", to: sellerAddress, zatoshis: price, memo: `${tag}: sale proceeds` });
     add({ kind: "winner-change", bidId: winner.id, to: winner.refundAddress, zatoshis: winner.deposit - price, memo: `${tag}: you won. This is your deposit above the price.` });
   }
   for (const d of depositors) {
@@ -226,8 +256,32 @@ export function plan(auctionId: string, sellerAddress: string, depositors: Depos
   return payments;
 }
 
-/** The fee a settlement will cost, as the signer computes it: 5,000 zat per action, at least two. */
-export function settlementFee(deposits: number, payments: number): number {
+/**
+ * The second payout of an auction with delivery: everything the escrow vault
+ * holds goes to one party. "release" pays the seller (the lot was delivered);
+ * "refund" pays the winner back (it was not).
+ */
+export function planEscrowPayout(
+  auctionId: string,
+  held: number,
+  decision: "release" | "refund",
+  sellerAddress: string,
+  winner: { bidId: string; refundAddress: string },
+): PlannedPayment[] {
+  assertAmount(held, "the held amount");
+  if (held < FEE_SHARE_FLOOR) throw new Error("the held amount is too small to pay the network fee");
+  const tag = `Dark Vault ${auctionId.slice(0, 8)}`;
+  return decision === "release"
+    ? [{ kind: "seller", to: sellerAddress, zatoshis: held, memo: `${tag}: sale proceeds, released after delivery`, pays_fee: true }]
+    : [{ kind: "escrow-refund", bidId: winner.bidId, to: winner.refundAddress, zatoshis: held, memo: `${tag}: the lot was not delivered. This is your payment, returned.`, pays_fee: true }];
+}
+
+/**
+ * The least a settlement can cost: 5,000 zat per action, at least two actions.
+ * The network may pad a transaction with extra actions for privacy, so the
+ * real fee, which the signer reports, can be a little higher.
+ */
+export function minSettlementFee(deposits: number, payments: number): number {
   return FEE_PER_ACTION * Math.max(2, deposits, payments);
 }
 
@@ -250,3 +304,9 @@ export function formatCoins(zat: number): string {
   const frac = String(zat % ZAT_PER_COIN).padStart(8, "0").replace(/0+$/, "");
   return frac ? `${whole}.${frac}` : String(whole);
 }
+
+// ---------------------------------------------------------------------------
+// 4. Delivery: sealed lots, sealed shipping details, disputes
+// ---------------------------------------------------------------------------
+
+export * from "./delivery";
