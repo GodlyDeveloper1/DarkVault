@@ -52,7 +52,8 @@ function NeedId {
   if ($AuctionId -notmatch "^[0-9a-f]{32}$") { throw "Give the auction id (32 hex characters), from 'list'." }
 }
 
-function Coins($zat) { return ("{0:0.########}" -f ($zat / 100000000)) }
+# Always with a decimal point, whatever this computer's language settings, so an amount can be pasted into wallet.ps1.
+function Coins($zat) { return ([decimal]$zat / 100000000).ToString("0.########", [System.Globalization.CultureInfo]::InvariantCulture) }
 
 switch ($Command) {
   "list" {
@@ -63,6 +64,7 @@ switch ($Command) {
       Write-Host "Auction      $($d.id)"
       Write-Host "Lot          $($d.title) ($($d.lot))"
       Write-Host "Description  $($d.description)"
+      if ($d.private) { Write-Host "Private      yes. Its listing is encrypted; what you see above was opened with the key the winner handed over with the complaint." }
       Write-Host "Price held   $(Coins $d.price) TAZ"
       Write-Host "Bonds        seller $(Coins $d.seller_bond) TAZ, winner $(Coins $d.buyer_bond) TAZ"
       Write-Host "Winner says  $($d.reason)"

@@ -437,6 +437,58 @@ textarea {
   color: var(--muted);
 }
 
+/* The practice auction panel on the home page */
+.practice {
+  margin: 0 0 40px;
+}
+.practice-in {
+  display: flex;
+  gap: 28px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.practice-act {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.practice-clock {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+.badge.practice-tag {
+  margin-left: 8px;
+  border-color: var(--amber);
+  color: var(--amber);
+}
+.board li em.house {
+  color: var(--amber);
+}
+.pay-with {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 2px;
+}
+.pay-with label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-weight: 500;
+  transition: border-color 0.15s ease;
+}
+.pay-with label.on {
+  border-color: var(--lime);
+}
+
 /* Countdown */
 .count {
   display: inline-flex;
@@ -494,7 +546,7 @@ textarea {
 }
 .stats {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
   gap: 10px;
   margin-top: 16px;
   padding-top: 16px;
@@ -511,9 +563,13 @@ textarea {
 }
 .cols {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   gap: 24px;
   align-items: start;
+}
+/* A column is never wider than its share, whatever is inside it (a long commitment, say). */
+.cols > div {
+  min-width: 0;
 }
 .steps {
   display: flex;
@@ -600,6 +656,94 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+/* How each bid fared, once the result is in. */
+.board li em {
+  flex: none;
+  font-style: normal;
+  font-family: var(--sans, inherit);
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.board li em.won {
+  color: var(--lime);
+}
+.board li em.out {
+  color: var(--amber);
+}
+.board li.mine b::after {
+  content: " you";
+  color: var(--text);
+  font-weight: 500;
+}
+.board li.mine b {
+  width: auto;
+}
+
+/* The verify card: a checklist that fills in as the browser checks the proof. */
+.checks {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  font-size: 0.86rem;
+}
+.checks li {
+  display: flex;
+  gap: 10px;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+  animation: rise 0.35s ease both;
+}
+.checks li i {
+  flex: none;
+  width: 1.1em;
+  font-style: normal;
+  font-weight: 700;
+}
+.checks li.pass i {
+  color: var(--lime);
+}
+.checks li.fail i,
+.checks li.fail {
+  color: var(--red);
+}
+.checks li.note i,
+.checks li.warn i,
+.checks li.warn {
+  color: var(--amber);
+}
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 700;
+  font-size: 1.05rem;
+  margin: 4px 0 0;
+}
+.verdict.pass {
+  color: var(--lime);
+}
+.verdict.fail {
+  color: var(--red);
+}
+.verdict.warn {
+  color: var(--amber);
+}
+.meter {
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 10px;
+}
+.meter span {
+  display: block;
+  height: 100%;
+  background: var(--lime);
+  transition: width 0.2s ease;
 }
 .price {
   font-family: var(--mono);
@@ -625,7 +769,7 @@ textarea {
 @media (max-width: 860px) {
   .room-head,
   .cols {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .top nav {
     gap: 14px;
@@ -882,4 +1026,81 @@ a.pay-link:hover {
   .seg {
     grid-template-columns: 1fr;
   }
+}
+
+/* --- Private auctions, the share card, and what each side has at stake --- */
+.seg.two {
+  grid-template-columns: repeat(2, 1fr);
+}
+@media (max-width: 720px) {
+  .seg.two {
+    grid-template-columns: 1fr;
+  }
+}
+.badge.private-tag {
+  border-color: var(--lime);
+  color: var(--lime);
+}
+.stakes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.stakes > div {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+}
+.stakes b {
+  display: block;
+  font-size: 1.25rem;
+  color: var(--text);
+  margin: 4px 0 8px;
+}
+.stakes p {
+  margin: 0;
+}
+@media (max-width: 720px) {
+  .stakes {
+    grid-template-columns: 1fr;
+  }
+}
+#share-card .addr,
+#share-made .addr {
+  word-break: break-all;
+}
+
+/* The least a bid must be, and what every bidder deposits: said in bold on the timer card. */
+.clock-min {
+  margin: 12px 0 0;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+.clock-min strong {
+  font-family: var(--mono);
+  font-size: 1.15rem;
+  color: var(--lime);
+}
+
+/* The deposit explained in the bidder's own numbers. */
+.deposit-math {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--lime);
+  border-radius: 12px;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.deposit-math ul {
+  margin: 8px 0 6px;
+  padding-left: 18px;
+}
+.deposit-math li {
+  margin: 2px 0;
+}
+.deposit-math strong {
+  color: var(--text);
+}
+.deposit-math .muted {
+  font-size: 0.82rem;
 }

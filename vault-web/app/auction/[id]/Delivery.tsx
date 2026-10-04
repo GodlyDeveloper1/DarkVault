@@ -18,6 +18,7 @@ import {
   decryptLot,
   deliveryContext,
   formatCoins,
+  listingKey,
   lotKeyHash,
   open,
   openText,
@@ -26,7 +27,8 @@ import {
   sellerKeys,
   type LotHeader,
 } from "vault-core";
-import type { Ticket } from "@/lib/tickets";
+import { inviteFor } from "@/lib/invites";
+import { tokenOf, type Ticket } from "@/lib/tickets";
 import type { BidView, PublicAuction, SellerView } from "@/lib/views";
 
 const when = (t: number | null) =>
@@ -331,7 +333,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
     setBusy(true);
     setError(null);
     try {
-      await post(url, { "x-bid-token": await bidToken(ticket.nonce) }, body);
+      await post(url, { "x-bid-token": await tokenOf(ticket) }, body);
       refresh();
       return true;
     } catch (e) {
@@ -353,7 +355,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
       try {
         const lotKey = await open(ticket.delivery_key!, envelope, deliveryContext(auction.id, "lot-key"));
         if ((await lotKeyHash(lotKey)) !== d.lot!.key_hash) throw new Error("it is not the key the listing promised");
-        const res = await fetch(`/api/auctions/${auction.id}/bids/${ticket.bid_id}/lot`, { headers: { "x-bid-token": await bidToken(ticket.nonce) } });
+        const res = await fetch(`/api/auctions/${auction.id}/bids/${ticket.bid_id}/lot`, { headers: { "x-bid-token": await tokenOf(ticket) } });
         if (!res.ok) throw new Error("the encrypted lot could not be downloaded");
         const lot = await decryptLot(lotKey, new Uint8Array(await res.arrayBuffer()));
         if (!stop) setUnlocked({ state: "open", ...lot, lotKey: toHex(lotKey) });
@@ -380,6 +382,26 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
     };
   }, [sealedNote, ticket.delivery_key, auction.id]);
 
+  /**
+   * A private auction's description is encrypted, and the operator has to read
+   * it to decide a dispute. The complaint carries the key to the listing (to
+   * that text and nothing else), handed over by this browser.
+   */
+  async function listingForOperator(): Promise<Record<string, string>> {
+    if (!auction.private) return {};
+    const invite = (await inviteFor(auction.id)) ?? ticket.invite;
+    return invite ? { listing_key: await listingKey(invite) } : {};
+  }
+
+  /** What the winner stands to lose by opening a dispute and losing it, and what the seller does. Said before either is asked to act. */
+  const stakes =
+    d.buyer_bond > 0 || d.seller_bond > 0 ? (
+      <p className="small muted" id="winner-stakes">
+        {d.buyer_bond > 0 && <>Your bond of {formatCoins(d.buyer_bond)} TAZ comes back with a completed sale. You lose it to the seller only if you open a dispute and lose it. </>}
+        {d.seller_bond > 0 && <>The seller has {formatCoins(d.seller_bond)} TAZ of their own at stake, which goes to you if they are found at fault.</>}
+      </p>
+    ) : null;
+
   async function sendAddress(e: React.FormEvent) {
     e.preventDefault();
     if (!sellerPub || address.trim().length < 10) return;
@@ -404,7 +426,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
   return (
     <div id="winner-delivery" data-stage={d.stage} style={{ marginTop: 14 }}>
       <h3>Delivery</h3>
-      {!d.resolution && <p className="small">Your payment is held and is not with the seller yet. It is released when {promise ? "the seller has done what was promised" : "you have the lot"}.</p>}
+      {!d.resolution && <p className="small">Your payment is held until the handover is complete.</p>}
 
       {/* Digital */}
       {d.kind === "digital" && d.stage === "awaiting-handover" && (
@@ -419,7 +441,8 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
       )}
       {unlocked?.state === "open" && (
         <div className="card accent" id="lot" style={{ marginBottom: 12 }}>
-          <strong>Your lot</strong> <span className="muted small">(unlocked in this browser; the site can&apos;t read it)</span>
+          <strong>Your lot</strong>{" "}
+          <span className="muted small">{auction.practice ? "(unlocked in this browser)" : "(unlocked in this browser; the site can't read it)"}</span>
 
           {unlocked.header.kind === "text" ? (
             <pre className="sealed-text" id="lot-text">
@@ -436,9 +459,11 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
       )}
       {unlocked?.state === "open" && d.stage === "awaiting-confirmation" && !complaining && (
         <div id="review">
-          <p className="small">
-            <strong>Check it.</strong> The seller is paid when you say it is what was described, or on {when(d.dispute_by)} if you say nothing.
+          <p className="small" id="review-deadline">
+            <strong>Check it.</strong> You have until {when(d.dispute_by)} to open a dispute if it is not what was described. After that the sale
+            is final.
           </p>
+          {stakes}
           <div className="row">
             <button className="primary" id="confirm-described" disabled={busy} onClick={() => void act({ action: "confirm" })}>
               It is what was described
@@ -454,14 +479,17 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           id="dispute-form"
           onSubmit={(e) => {
             e.preventDefault();
-            void act({ action: "dispute", lot_key: unlocked.lotKey, reason }).then((done) => done && setComplaining(false));
+            void listingForOperator()
+              .then((listing) => act({ action: "dispute", lot_key: unlocked.lotKey, reason, ...listing }))
+              .then((done) => done && setComplaining(false));
           }}
         >
           <label htmlFor="reason">What is wrong with it?</label>
           <textarea id="reason" value={reason} maxLength={600} onChange={(e) => setReason(e.target.value)} placeholder="How it differs from the description." />
           <p className="hint">
             Your browser hands the operator the key to this one lot, so they can open exactly what was delivered and compare it with the
-            description. The seller and the operator can read what you write. Your payment stays held until the operator decides.
+            description.{auction.private && " This auction is private, so your browser also hands over the key to its description (to that text and nothing else)."} The
+            seller and the operator can read what you write. Your payment stays held until the operator decides.
             {d.buyer_bond > 0 && <> If the operator finds the lot is as described, your bond of {formatCoins(d.buyer_bond)} TAZ goes to the seller.</>}
           </p>
           <div className="row" style={{ marginTop: 12 }}>
@@ -532,8 +560,10 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
         <>
           <p className="small">
             <strong>{promise ? "The seller says it is done." : "The seller has shipped it."}</strong>{" "}
-            {promise ? "Confirm once you have seen it." : "Confirm when it arrives."} If you say nothing by {when(d.dispute_by)}, the seller is paid.
+            {promise ? "Confirm once you have seen it." : "Confirm when it arrives."} You have until {when(d.dispute_by)} to open a dispute if
+            something is wrong. After that the sale is final.
           </p>
+          {stakes}
           {note && (
             <pre className="sealed-text" id="seller-note">
               {note}
@@ -558,13 +588,16 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           id="dispute-form"
           onSubmit={(e) => {
             e.preventDefault();
-            void act({ action: "dispute", reason }).then((done) => done && setComplaining(false));
+            void listingForOperator()
+              .then((listing) => act({ action: "dispute", reason, ...listing }))
+              .then((done) => done && setComplaining(false));
           }}
         >
           <label htmlFor="reason">What is wrong?</label>
           <textarea id="reason" value={reason} maxLength={600} onChange={(e) => setReason(e.target.value)} placeholder={promise ? "It was not done, or not as promised." : "It has not arrived, or it is not what was described."} />
           <p className="hint">
-            The seller and the operator of this site can read this. Your payment stays held until the operator decides.
+            The seller and the operator of this site can read this.{auction.private && " This auction is private, so your browser also hands the operator the key to its description (to that text and nothing else), so they can see what was promised."} Your
+            payment stays held until the operator decides.
             {d.buyer_bond > 0 && <> If the operator decides against you, your bond of {formatCoins(d.buyer_bond)} TAZ goes to the seller.</>}
           </p>
           <div className="row" style={{ marginTop: 12 }}>

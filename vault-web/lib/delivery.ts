@@ -15,7 +15,7 @@
 // bonds: whoever is at fault forfeits theirs to the other side (see
 // vault-core planEscrowPayout).
 import "server-only";
-import { decryptLot, judgeDigitalDelivery, lotKeyHash, type Fault, type LotHeader } from "vault-core";
+import { decryptListingWithKey, decryptLot, judgeDigitalDelivery, lotKeyHash, type Fault, type ListingText, type LotHeader } from "vault-core";
 import { LIMITS } from "./limits";
 import { loadLot } from "./store";
 import type { Auction, Delivery } from "./types";
@@ -102,7 +102,7 @@ export function winnerConfirm(auction: Auction, now: number): string | null {
  *   open the lot. The price stays held until the operator decides.
  * Physical (`reason`): the price stays held until the operator decides.
  */
-export async function winnerDispute(auction: Auction, now: number, input: { delivery_key?: unknown; lot_key?: unknown; reason?: unknown }): Promise<string | null> {
+export async function winnerDispute(auction: Auction, now: number, input: { delivery_key?: unknown; lot_key?: unknown; listing_key?: unknown; reason?: unknown }): Promise<string | null> {
   const d = inProgress(auction);
   if (typeof d === "string") return d;
   if (d.dispute) return "a dispute is already open";
@@ -111,9 +111,24 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
   const reason = typeof input.reason === "string" ? input.reason.trim() : "";
   const reasonProblem = reason.length < 10 || reason.length > LIMITS.disputeReasonMax ? `please say what is wrong, in 10 to ${LIMITS.disputeReasonMax} characters` : null;
 
+  // A private auction's description is encrypted, and a dispute the operator
+  // decides is about that description. The winner's browser hands over the
+  // key to the listing (and only the listing) with the complaint.
+  let listing: { listing_key: string } | Record<string, never> = {};
+  const needsListing = !!auction.private && (d.kind !== "digital" || typeof input.lot_key === "string");
+  if (needsListing) {
+    if (typeof input.listing_key !== "string" || !/^[0-9a-f]{64}$/.test(input.listing_key)) return "the key to this private listing is needed, so the operator can read what was described";
+    try {
+      await decryptListingWithKey(input.listing_key, auction.private!.listing);
+    } catch {
+      return "that key does not open this auction's listing";
+    }
+    listing = { listing_key: input.listing_key };
+  }
+
   if (d.kind !== "digital") {
     if (reasonProblem) return reasonProblem;
-    d.dispute = { at: now, kind: d.kind, reason };
+    d.dispute = { at: now, kind: d.kind, reason, ...listing };
     return null;
   }
 
@@ -132,7 +147,7 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
     } catch {
       return "that key does not open the lot. Ask for your payment back instead.";
     }
-    d.dispute = { at: now, kind: "not-as-described", reason, lot_key: input.lot_key };
+    d.dispute = { at: now, kind: "not-as-described", reason, lot_key: input.lot_key, ...listing };
     return null;
   }
 
@@ -166,6 +181,9 @@ export function operatorResolve(auction: Auction, now: number, decision: unknown
   if (decision !== "release" && decision !== "refund") return "the decision must be release or refund";
   const fault: Fault = noFault === true ? "none" : decision === "release" ? "winner" : "seller";
   d.resolution = { decision, reason: "operator", fault, at: now };
+  // The keys the winner handed over were for this decision. It is made: they are not kept.
+  delete d.dispute.lot_key;
+  delete d.dispute.listing_key;
   return null;
 }
 
@@ -176,6 +194,21 @@ export async function disputedLot(auction: Auction): Promise<{ header: LotHeader
   if (!key || !lot) return null;
   try {
     return await decryptLot(unhex(key), lot);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * For the operator: what a private auction's listing says, opened with the
+ * key the winner handed over with their complaint. Null when the auction is
+ * not private or no key was handed over.
+ */
+export async function disputedListing(auction: Auction): Promise<ListingText | null> {
+  const key = auction.delivery?.dispute?.listing_key;
+  if (!key || !auction.private) return null;
+  try {
+    return await decryptListingWithKey(key, auction.private.listing);
   } catch {
     return null;
   }

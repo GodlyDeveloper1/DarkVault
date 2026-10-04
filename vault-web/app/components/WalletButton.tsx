@@ -7,9 +7,12 @@
 // that bid's own token, the same request the auction page makes.
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { bidToken, formatCoins } from "vault-core";
-import { allTickets, backupFile, parseBackup, saveTicket, WALLET_EVENT, type Ticket } from "@/lib/tickets";
+import { decryptListing, formatCoins } from "vault-core";
+import { inviteFor, inviteHeaders } from "@/lib/invites";
+import { tokenOf, allTickets, backupFile, parseBackup, saveTicket, WALLET_EVENT, type Ticket } from "@/lib/tickets";
 import { addressProblem, loadWallet, maskAddress, OPEN_EVENT, saveWallet, type Wallet } from "@/lib/wallet";
+import { forgetPracticeWallet, makePracticeWallet, practiceWallet } from "@/lib/practiceClient";
+import type { WalletView } from "@/lib/house/practice";
 import type { BidView, PublicAuction } from "@/lib/views";
 
 interface Row {
@@ -25,11 +28,16 @@ function statusOf(row: Row): { text: string; cls: string } {
   if (auction.state === "open") {
     if (!funded) return { text: "Waiting for your deposit", cls: "amber" };
     const d = view!.deposit!;
-    return d.counted >= ticket.amount
+    // Same-size deposits: every bid deposits the same amount. Before: the bid plus the bond.
+    const need = auction.deposit_required ?? ticket.amount + (auction.delivery?.buyer_bond ?? 0);
+    return d.total >= need
       ? { text: `Funded and sealed · ${Math.min(d.confirmations, d.needed)}/${d.needed} confirmations`, cls: "lime" }
-      : { text: "Deposit is smaller than the bid", cls: "red" };
+      : { text: auction.deposit_required ? "Deposit is smaller than this auction asks for" : "Deposit is smaller than the bid", cls: "red" };
   }
-  if (auction.state === "revealing") return { text: view?.revealed ? "Revealed, waiting for the result" : "Open the auction to reveal this bid", cls: "amber" };
+  if (auction.state === "revealing") {
+    if (view?.revealed) return { text: auction.scheme === 2 ? "Opened, waiting for the result" : "Revealed, waiting for the result", cls: "amber" };
+    return { text: auction.scheme === 2 ? "Bidding closed · the time lock is opening the bids" : "Open the auction to reveal this bid", cls: "amber" };
+  }
   const refund = view?.payments.find((p) => p.kind !== "seller");
   if (view?.standing === "won") {
     const stage = view.delivery?.stage;
@@ -63,6 +71,10 @@ export default function WalletButton() {
   const [address, setAddress] = useState("");
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // The practice wallet, on sites that have one to give.
+  const [practiceOn, setPracticeOn] = useState(false);
+  const [pw, setPw] = useState<WalletView | null>(null);
+  const [pwBusy, setPwBusy] = useState(false);
   const panel = useRef<HTMLDivElement>(null);
 
   const sync = useCallback(() => {
@@ -99,6 +111,29 @@ export default function WalletButton() {
     return () => window.removeEventListener("keydown", onKey);
   }, [phase, close]);
 
+  // While the panel is open, show the practice wallet and keep its balance fresh.
+  useEffect(() => {
+    if (phase !== "open") return;
+    let stop = false;
+    const load = () => {
+      void fetch("/api/status")
+        .then((r) => r.json())
+        .then((s) => !stop && setPracticeOn(!!s.practice))
+        .catch(() => {});
+      void practiceWallet()
+        .then((w) => !stop && setPw(w))
+        .catch(() => {});
+    };
+    load();
+    const t = setInterval(load, 8000);
+    window.addEventListener(WALLET_EVENT, load);
+    return () => {
+      stop = true;
+      clearInterval(t);
+      window.removeEventListener(WALLET_EVENT, load);
+    };
+  }, [phase]);
+
   // While the panel is open, keep each bid's status fresh.
   useEffect(() => {
     if (phase !== "open" || tickets.length === 0) return;
@@ -108,8 +143,19 @@ export default function WalletButton() {
       await Promise.all(
         [...new Set(tickets.map((t) => t.auction_id))].map(async (id) => {
           try {
-            const res = await fetch(`/api/auctions/${id}`);
-            if (res.ok) auctions.set(id, (await res.json()).auction);
+            const res = await fetch(`/api/auctions/${id}`, { headers: await inviteHeaders(id) });
+            if (!res.ok) return;
+            const auction = (await res.json()).auction as PublicAuction;
+            // A private auction's title is opened here, with this browser's invite.
+            const invite = auction.private ? await inviteFor(id) : null;
+            if (auction.private && invite) {
+              try {
+                auction.title = (await decryptListing(invite, auction.private.listing)).title;
+              } catch {
+                /* it keeps the name "Private auction" */
+              }
+            }
+            auctions.set(id, auction);
           } catch {
             /* next round */
           }
@@ -120,7 +166,7 @@ export default function WalletButton() {
         tickets.map(async (ticket) => {
           const row: Row = { ticket, auction: auctions.get(ticket.auction_id) };
           try {
-            const res = await fetch(`/api/auctions/${ticket.auction_id}/bids/${ticket.bid_id}`, { headers: { "x-bid-token": await bidToken(ticket.nonce) } });
+            const res = await fetch(`/api/auctions/${ticket.auction_id}/bids/${ticket.bid_id}`, { headers: { "x-bid-token": await tokenOf(ticket) } });
             if (res.ok) row.view = (await res.json()).bid;
           } catch {
             /* next round */
@@ -245,6 +291,65 @@ export default function WalletButton() {
             )}
 
             {message && <p className="small ok" style={{ marginTop: 14 }}>{message}</p>}
+
+            {(practiceOn || pw) && (
+              <div className="card" id="practice-wallet" style={{ marginTop: 18 }}>
+                <h3 style={{ marginTop: 0 }}>Practice wallet</h3>
+                {pw ? (
+                  <>
+                    <dl className="kv" style={{ margin: 0 }}>
+                      <dt>Balance</dt>
+                      <dd id="practice-balance">{formatCoins(pw.balance)} TAZ</dd>
+                      {pw.locked > 0 && (
+                        <>
+                          <dt>In open auctions</dt>
+                          <dd>{formatCoins(pw.locked)} TAZ</dd>
+                        </>
+                      )}
+                    </dl>
+                    <p className="hint">
+                      Testnet coins the site holds for you. They only work in practice auctions and can&apos;t be withdrawn, and the site can tell
+                      which practice bids are yours. For a real auction, use your own wallet.
+                    </p>
+                    <button
+                      type="button"
+                      className="link small"
+                      onClick={() => {
+                        forgetPracticeWallet();
+                        setPw(null);
+                      }}
+                    >
+                      Forget this practice wallet
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="small muted">
+                      No testnet coins? A practice wallet gives you some to bid with in practice auctions. The site holds them, so it is for
+                      practice only.
+                    </p>
+                    <button
+                      type="button"
+                      id="practice-make-panel"
+                      disabled={pwBusy}
+                      onClick={async () => {
+                        setPwBusy(true);
+                        setMessage(null);
+                        try {
+                          setPw(await makePracticeWallet());
+                        } catch (e) {
+                          setMessage(e instanceof Error ? e.message : String(e));
+                        } finally {
+                          setPwBusy(false);
+                        }
+                      }}
+                    >
+                      {pwBusy ? "Making it…" : "Get a practice wallet"}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
 
             <h3 style={{ marginTop: 28 }}>Your bids</h3>
             {tickets.length === 0 ? (

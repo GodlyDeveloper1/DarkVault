@@ -27,6 +27,11 @@ const config: NextConfig = {
   turbopack: { root: path.join(__dirname, "..") },
   outputFileTracingRoot: path.join(__dirname, ".."),
   poweredByHeader: false,
+  // The development server keeps no cache on disk between runs. With one, a
+  // cache left over from before the code was updated made the server lose
+  // track of routes (it answered "not found" for pages that exist) until the
+  // .next folder was deleted. Starting clean each time costs a few seconds.
+  experimental: { turbopackFileSystemCacheForDev: false },
   // Let the dev server work when opened as http://127.0.0.1:3100 as well as localhost.
   allowedDevOrigins: ["127.0.0.1"],
   // Privacy headers: no referrer leaks to other sites, no embedding, no

@@ -8,18 +8,30 @@
 //
 //   node scripts/mock-signer.mjs
 //
+// Two stand-ins can play the main signer and the house signer (a second
+// wallet). Give each the other's address in MOCK_PEERS, and a payment from one
+// to an address of the other arrives there as a deposit from outside:
+//
+//   MOCK_SIGNER_PORT=8082 MOCK_PEERS=http://127.0.0.1:8083 node scripts/mock-signer.mjs
+//   MOCK_SIGNER_PORT=8083 MOCK_PEERS=http://127.0.0.1:8082 node scripts/mock-signer.mjs
+//
 // Test-only routes:
 //   POST /__deposit {address, zatoshis}   pretend someone paid a deposit address
 //   GET  /__log                           everything this stand-in has been sent
+//   GET  /__vaults                        every vault and what it holds
+//   POST /__lose-reply {n}                the next n payouts happen, but their answers are lost
+//                                         (as when a connection drops): for testing recovery
 import http from "node:http";
 
 const PORT = Number(process.env.MOCK_SIGNER_PORT ?? 8082);
 const BLOCK_MS = Number(process.env.MOCK_BLOCK_MS ?? 5000);
 const MIN_CONF = Number(process.env.VAULT_MIN_CONFIRMATIONS ?? 2);
+const PEERS = (process.env.MOCK_PEERS ?? "").split(",").map((p) => p.trim()).filter(Boolean);
 
 let height = 5_000_000;
 setInterval(() => (height += 1), BLOCK_MS).unref();
 
+let loseReplies = 0;
 const vaults = new Map(); // id -> { birthday, addresses: Set, deposits: [], settlements: [] }
 const log = [];
 const hex = (bytes) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -84,9 +96,15 @@ function settle(v, payments) {
   // receiving vault counts it in its balance but does not list it as a deposit
   // from outside.
   for (const p of s.payments) {
+    let here = false;
     for (const other of vaults.values()) {
-      if (other.addresses.has(p.to)) other.deposits.push({ txid: s.txid, address: p.to, value: p.zatoshis, mined_height: s.mined_height, spent: false, internal: true });
+      if (other.addresses.has(p.to)) {
+        other.deposits.push({ txid: s.txid, address: p.to, value: p.zatoshis, mined_height: s.mined_height, spent: false, internal: true });
+        here = true;
+      }
     }
+    // An address of another wallet (a peer stand-in): it arrives there as a deposit from outside.
+    if (!here) for (const peer of PEERS) fetch(`${peer}/__deposit`, { method: "POST", body: JSON.stringify({ address: p.to, zatoshis: p.zatoshis }) }).catch(() => {});
   }
   return [200, { txid: s.txid, status: "pending", mined_height: null, fee_zatoshis: fee, payments: s.payments }];
 }
@@ -103,6 +121,8 @@ http
     };
     const { method, url: path } = req;
     if (method === "GET" && path === "/__log") return json(200, log);
+    if (method === "GET" && path === "/__vaults")
+      return json(200, [...vaults].map(([id, v]) => ({ id, held: v.deposits.filter((d) => !d.spent).reduce((n, d) => n + d.value, 0) })));
     if (method === "GET" && path === "/health") return text(200, "ok");
 
     const raw = method === "POST" ? await readBody(req) : "";
@@ -125,6 +145,11 @@ http
       const id = hex(8);
       vaults.set(id, { birthday: height, addresses: new Set(), deposits: [], settlements: [] });
       return json(200, { vault_id: id, birthday_height: height });
+    }
+
+    if (method === "POST" && path === "/__lose-reply") {
+      loseReplies = Number(body.n ?? 1);
+      return json(200, { lose: loseReplies });
     }
 
     if (method === "POST" && path === "/__deposit") {
@@ -150,6 +175,10 @@ http
       }
       if (method === "POST" && m[2] === "/settle") {
         const [code, value] = settle(v, body.payments);
+        if (code === 200 && loseReplies > 0) {
+          loseReplies -= 1;
+          return text(500, "the payout was made, but this answer is a pretend failure (test)");
+        }
         return code === 200 ? json(200, value) : text(code, value);
       }
     }

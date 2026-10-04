@@ -8,9 +8,33 @@
 // key derived from the manage key. The server gets the ciphertext and a hash
 // of the key. A physical lot gets a public key that the winner's browser will
 // seal the shipping address to.
+//
+// A private auction goes one step further: the title and description are
+// encrypted here too, with a key that travels only in the invite link. The
+// server stores them unread, lists the auction nowhere, and lets in only
+// browsers that show a token derived from that key.
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { MAX_LOT_BYTES, MIN_BID, bondFor, encryptLot, formatCoins, lotKeyHash, manageToken, newNonce, parseCoins, sellerKeys, sha256Hex, toBase64 } from "vault-core";
+import {
+  MAX_LOT_BYTES,
+  MIN_BID,
+  bondFor,
+  encryptListing,
+  encryptLot,
+  formatCoins,
+  inviteAccess,
+  inviteFromManage,
+  lotKeyHash,
+  manageToken,
+  newNonce,
+  parseCoins,
+  sellerKeys,
+  sha256Hex,
+  suggestedCeiling,
+  toBase64,
+} from "vault-core";
+import Qr from "@/app/components/Qr";
+import { rememberInvite, shareLink } from "@/lib/invites";
 
 const DURATIONS: [string, number][] = [
   ["15 minutes", 15 * 60],
@@ -44,11 +68,17 @@ export default function Sell() {
   // The seller's bond. Empty means "the minimum"; the seller may stake more.
   const [bond, setBond] = useState("");
   const [bondPercent, setBondPercent] = useState(10);
+  // The highest bid allowed. Empty means "five times the reserve".
+  const [ceiling, setCeiling] = useState("");
+  const [maxMultiple, setMaxMultiple] = useState(100);
 
   useEffect(() => {
     fetch("/api/status")
       .then((r) => r.json())
-      .then((b) => typeof b.bond_percent === "number" && setBondPercent(b.bond_percent))
+      .then((b) => {
+        if (typeof b.bond_percent === "number") setBondPercent(b.bond_percent);
+        if (typeof b.max_ceiling_multiple === "number") setMaxMultiple(b.max_ceiling_multiple);
+      })
       .catch(() => {});
   }, []);
   const [title, setTitle] = useState("");
@@ -59,8 +89,11 @@ export default function Sell() {
   const [payout, setPayout] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [made, setMade] = useState<{ id: string; key: string; bond: number } | null>(null);
+  const [made, setMade] = useState<{ id: string; key: string; bond: number; invite: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedShare, setCopiedShare] = useState(false);
+  // Who can see the auction: everyone (it is listed), or only people given the invite link.
+  const [visibility, setVisibility] = useState<"public" | "private">("public");
 
   const reserveZat = parseCoins(reserve);
   const reserveProblem =
@@ -83,7 +116,19 @@ export default function Sell() {
   const bondZat = bond.trim() === "" ? minBond : parseCoins(bond);
   const bondProblem =
     minBond === 0 ? null : bondZat === null ? "Enter an amount like 0.001" : bondZat < minBond ? `Your bond must be at least ${formatCoins(minBond)} TAZ` : null;
-  const ready = title.trim().length >= 3 && !reserveProblem && !lotProblem && !bondProblem && payout.trim().length > 20 && !busy;
+  const suggested = reserveZat !== null && !reserveProblem ? suggestedCeiling(reserveZat) : 0;
+  const ceilingZat = ceiling.trim() === "" ? suggested : parseCoins(ceiling);
+  const ceilingProblem =
+    reserveZat === null || reserveProblem
+      ? null
+      : ceilingZat === null
+        ? "Enter an amount like 0.05"
+        : ceilingZat < reserveZat
+          ? "It can't be below the reserve"
+          : ceilingZat > reserveZat * maxMultiple
+            ? `At most ${maxMultiple} times the reserve (${formatCoins(reserveZat * maxMultiple)} TAZ): every bidder has to deposit it`
+            : null;
+  const ready = title.trim().length >= 3 && !reserveProblem && !ceilingProblem && !lotProblem && !bondProblem && payout.trim().length > 20 && !busy;
 
   function pick(next: "digital" | "physical" | "promise") {
     setKind(next);
@@ -109,13 +154,18 @@ export default function Sell() {
         delivery.lot = toBase64(lot);
         delivery.key_hash = await lotKeyHash(keys.lotKey);
       }
+      // Private: the title and description are encrypted here. The site is sent the ciphertext and the hash of an access token.
+      const invite = visibility === "private" ? await inviteFromManage(key) : null;
+      const listing = invite
+        ? { private: { listing: await encryptListing(invite, { title: title.trim(), description: description.trim() }), access_hash: await sha256Hex(await inviteAccess(invite)) } }
+        : { title: title.trim(), description: description.trim() };
       const res = await fetch("/api/auctions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: title.trim(),
-          description: description.trim(),
+          ...listing,
           reserve: reserveZat,
+          ceiling: ceilingZat,
           duration_seconds: duration,
           reveal_seconds: reveal,
           payout_address: payout.trim(),
@@ -130,7 +180,8 @@ export default function Sell() {
       } catch {
         /* the link below still works */
       }
-      setMade({ id: body.auction.id, key, bond: body.auction.state === "funding" ? (bondZat ?? minBond) : 0 });
+      if (invite) rememberInvite(body.auction.id, invite);
+      setMade({ id: body.auction.id, key, bond: body.auction.state === "funding" ? (bondZat ?? minBond) : 0, invite });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -140,8 +191,8 @@ export default function Sell() {
 
   if (made) {
     const origin = typeof window === "undefined" ? "" : window.location.origin;
-    const link = `${origin}/auction/${made.id}`;
-    const manage = `${link}#manage=${made.key}`;
+    const link = shareLink(origin, made.id, made.invite);
+    const manage = `${origin}/auction/${made.id}#manage=${made.key}`;
     return (
       <main>
         <div className="shell narrow">
@@ -156,9 +207,34 @@ export default function Sell() {
               </p>
             </div>
           )}
-          <div className="card accent">
-            <h3>Share this link with bidders</h3>
-            <div className="addr" id="public-link">{link}</div>
+          <div className="card accent" id="share-made">
+            <h3>{made.invite ? "Send this invite to the people you want to bid" : "Share this link with bidders"}</h3>
+            {made.invite && (
+              <p className="small" id="invite-note">
+                <strong>This auction is private.</strong> It is not listed, and its title and description were encrypted in your browser: this
+                site can&apos;t read them. Only someone with this link can see the auction or bid, and anyone who has it can pass it on, so send it
+                only to the people you invite. The part after the # is the key; it never reaches this site.
+              </p>
+            )}
+            <div className="row" style={{ alignItems: "flex-start" }}>
+              <Qr value={link} size={150} />
+              <div className="grow">
+                <div className="addr" id="public-link">{link}</div>
+                <div className="row" style={{ marginTop: 10 }}>
+                  <button
+                    type="button"
+                    id="copy-share"
+                    onClick={() => {
+                      void navigator.clipboard?.writeText(link);
+                      setCopiedShare(true);
+                    }}
+                  >
+                    {copiedShare ? "Copied" : made.invite ? "Copy the invite link" : "Copy the link"}
+                  </button>
+                </div>
+                <p className="hint">The QR code holds the same link: scan it with a phone to open the auction there.</p>
+              </div>
+            </div>
           </div>
           <div className="card warn">
             <h3>Keep this link for yourself</h3>
@@ -210,6 +286,28 @@ export default function Sell() {
 
           <label htmlFor="description">Description</label>
           <textarea id="description" value={description} maxLength={1200} onChange={(e) => setDescription(e.target.value)} placeholder="Condition, what exactly the winner gets, anything a bidder should know." />
+
+          <label style={{ marginBottom: 8 }}>Who can see this auction?</label>
+          <div className="seg two" role="radiogroup" aria-label="Who can see this auction">
+            <label className={visibility === "public" ? "on" : undefined}>
+              <input type="radio" name="visibility" id="visibility-public" checked={visibility === "public"} onChange={() => setVisibility("public")} />
+              <b>Public</b>
+              <span>Listed on the home page. Anyone can see it and bid.</span>
+            </label>
+            <label className={visibility === "private" ? "on" : undefined}>
+              <input type="radio" name="visibility" id="visibility-private" checked={visibility === "private"} onChange={() => setVisibility("private")} />
+              <b>Private</b>
+              <span>Invite only. Not listed, and the title and description are encrypted in your browser.</span>
+            </label>
+          </div>
+          {visibility === "private" && (
+            <p className="hint" id="private-hint">
+              You get an invite link and a QR code to send to the people you choose. Only they can see what you are selling or bid, and this
+              site can&apos;t read the title or description. It still runs the auction, so it knows the reserve, the times and how many bids
+              there are. One exception: if the winner opens a dispute, their browser gives the operator the key to the description, so the
+              dispute can be judged.
+            </p>
+          )}
 
           <label style={{ marginBottom: 8 }}>What kind of lot is it?</label>
           <div className="seg" role="radiogroup" aria-label="How the winner receives the lot">
@@ -274,7 +372,7 @@ export default function Sell() {
               </select>
             </div>
             <div className="grow">
-              <label htmlFor="dispute-in">The winner can complain for</label>
+              <label htmlFor="dispute-in">The winner can open a dispute for</label>
               <select id="dispute-in" value={disputeIn} onChange={(e) => setDisputeIn(Number(e.target.value))}>
                 {WINDOWS.map(([label, s]) => (
                   <option key={s} value={s}>
@@ -307,6 +405,27 @@ export default function Sell() {
               <p className={reserveProblem ? "hint error" : "hint"}>{reserveProblem ?? "The least you'll accept. It is public."}</p>
             </div>
             <div className="grow">
+              <label htmlFor="ceiling">Highest bid allowed (TAZ)</label>
+              <input id="ceiling" inputMode="decimal" value={ceiling} onChange={(e) => setCeiling(e.target.value)} placeholder={suggested ? formatCoins(suggested) : ""} />
+              <p className={ceilingProblem ? "hint error" : "hint"}>
+                {ceilingProblem ??
+                  `Every bidder deposits this amount${minBond > 0 ? " plus the bond" : ""}, whatever they bid, so a deposit gives no bid away. What they don't owe comes back. Set it just above what you expect the lot to reach: the higher it is, the more every bidder has to lock up.`}
+              </p>
+              {!ceilingProblem && ceilingZat !== null && ceilingZat > 0 && (
+                <p className="hint" id="ceiling-effect">
+                  {ceiling.trim() === "" ? (
+                    <>
+                      Left empty, it is <strong>{formatCoins(ceilingZat)} TAZ</strong> (five times the reserve).{" "}
+                    </>
+                  ) : null}
+                  Each bidder will deposit <strong>{formatCoins(ceilingZat + minBond)} TAZ</strong> and get back everything above what they owe.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="row" style={{ alignItems: "flex-start" }}>
+            <div className="grow">
               <label htmlFor="duration">Bidding runs for</label>
               <select id="duration" value={duration} onChange={(e) => setDuration(Number(e.target.value))}>
                 {DURATIONS.map(([label, s]) => (
@@ -317,7 +436,7 @@ export default function Sell() {
               </select>
             </div>
             <div className="grow">
-              <label htmlFor="reveal">Then bidders reveal within</label>
+              <label htmlFor="reveal">Backup reveal window</label>
               <select id="reveal" value={reveal} onChange={(e) => setReveal(Number(e.target.value))}>
                 {REVEALS.map(([label, s]) => (
                   <option key={s} value={s}>
@@ -325,6 +444,7 @@ export default function Sell() {
                   </option>
                 ))}
               </select>
+              <p className="hint">Bids open by themselves when bidding ends. This window is only used if that fails.</p>
             </div>
           </div>
 

@@ -1026,7 +1026,6 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
         ));
     }
 
-    let deposits = read_deposits(config, account, 0)?.len();
     let change_strategy = MultiOutputChangeStrategy::new(
         StandardFeeRule::Zip317,
         None,
@@ -1039,12 +1038,17 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
     // a transaction needs at least max(inputs, outputs, 2) actions, and the
     // library may pad it with dummy actions for privacy. The fee comes out of
     // the payments marked `pays_fee`, so the right fee is the smallest one for
-    // which the proposal balances with nothing left over: start at the lower
-    // bound and go up one action at a time.
-    let lower_bound = 5_000 * (deposits.max(payments.len()).max(2) as u64);
+    // which the proposal balances with nothing left over.
+    //
+    // The search starts from the outputs alone and goes up one action at a
+    // time. It must not start from the number of deposits the vault has ever
+    // received: a vault that settles a second time (a late deposit, a payment
+    // that arrived after the first payout) has already spent most of those,
+    // and a fee that is too high leaves change and can never balance.
+    let lower_bound = 5_000 * (payments.len().max(2) as u64);
     let mut chosen = None;
     let mut last_problem = String::from("no fee was tried");
-    for extra_actions in 0..=64u64 {
+    for extra_actions in 0..=128u64 {
         let fee = lower_bound + 5_000 * extra_actions;
         let amounts = match apply_fee(payments, fee) {
             Ok(a) => a,

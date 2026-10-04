@@ -464,3 +464,14 @@ test("the manage token proves ownership without giving away the seller's keys", 
   assert.notEqual((await sellerKeys(token)).publicKey, keys.publicKey);
   await assert.rejects(() => manageToken("short"));
 });
+
+test("a delivery key that nothing can be sealed to is recognised", async () => {
+  const core = await import("../src/index.ts");
+  const good = core.deliveryPublic(core.newDeliveryKey());
+  assert.ok(core.validDeliveryPublic(good));
+  // All zeros is a point of low order: sealing to it fails, so a bid may not carry it.
+  assert.ok(!core.validDeliveryPublic("00".repeat(32)));
+  await assert.rejects(() => core.seal("00".repeat(32), new Uint8Array([1]), "x"));
+  assert.ok(!core.validDeliveryPublic("zz"));
+  assert.ok(!core.validDeliveryPublic(good.slice(2)));
+});

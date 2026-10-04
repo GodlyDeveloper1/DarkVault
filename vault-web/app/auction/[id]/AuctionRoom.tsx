@@ -2,27 +2,60 @@
 
 // The auction room. Everything a bidder does happens here:
 //
-//   1. Seal a bid: the amount is hashed into a commitment in this browser. The
-//      server is sent the commitment and a refund address, never the amount.
+//   1. Seal a bid: this browser turns the amount into a commitment, and locks
+//      the amount in time (encrypted to a moment after bidding ends). The
+//      server is sent the commitment, the locked bid and a refund address,
+//      never an amount it can read.
 //   2. Deposit: the server answers with an address made for this one bid.
-//   3. Reveal: once bidding has closed, this browser opens the commitment.
-//   4. Result: who won is decided by the revealed amounts; one transaction pays
-//      the seller and returns every other deposit.
+//      Every bidder deposits the same amount, so a deposit gives no bid away.
+//   3. Unlock: once bidding has closed the time lock opens and the server
+//      reads the bids. If the lock can't be opened, this browser opens its own
+//      bid from its ticket instead.
+//   4. Result: the highest bid wins; one transaction pays the seller and
+//      returns every other deposit. The result comes with a proof, which this
+//      browser checks (see Verify.tsx).
 //   5. Delivery (see Delivery.tsx): when the lot has a delivery, the price is
 //      held until the lot has been handed over.
 //
-// The amount and its nonce are kept in this browser (and in the ticket file the
-// bidder can save). They are what "sealed" means, so they are not sent anywhere
-// until the auction says it is time to reveal.
+// Auctions listed before time-locked bids existed work as they did: a SHA-256
+// commitment, a deposit that covers the bid, and a reveal from this browser.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { bidToken, commit, deliveryPublic, formatCoins, manageToken, MIN_BID, newDeliveryKey, newNonce, parseCoins, sha256Hex } from "vault-core";
+import {
+  bidToken,
+  commit,
+  decryptListing,
+  deliveryPublic,
+  formatCoins,
+  isPublicBeacon,
+  manageToken,
+  newId,
+  MIN_BID,
+  newBlinding,
+  newDeliveryKey,
+  newNonce,
+  parseCoins,
+  pedersenCommit,
+  roundAfter,
+  roundTimeMs,
+  sealBid,
+  sealedHash,
+  sha256Hex,
+  trustedChain,
+  verifyReceipt,
+  type ListingText,
+  type Receipt,
+} from "vault-core";
 import Countdown from "@/app/components/Countdown";
 import Qr from "@/app/components/Qr";
 import { stateLabel } from "@/app/components/AuctionTile";
-import { loadTickets, parseTicketFile, saveTicket, ticketFile, WALLET_EVENT, type Ticket } from "@/lib/tickets";
+import { loadTickets, mayOpenByHand, parseTicketFile, saveTicket, ticketFile, tokenOf, WALLET_EVENT, type Ticket } from "@/lib/tickets";
+import { inviteFor, inviteHeaders, shareLink } from "@/lib/invites";
+import { makePracticeWallet, practiceToken, practiceWallet } from "@/lib/practiceClient";
 import { loadWallet, OPEN_EVENT, paymentRequest } from "@/lib/wallet";
+import type { WalletView } from "@/lib/house/practice";
 import type { BidView, PublicAuction, SellerView } from "@/lib/views";
 import { SellerDelivery, WinnerDelivery } from "./Delivery";
+import VerifyResult from "./Verify";
 
 const STANDING: Record<string, string> = {
   won: "You won.",
@@ -32,6 +65,21 @@ const STANDING: Record<string, string> = {
   underfunded: "Your deposit did not cover your bid (and the bond, if this auction has one), so the bid did not count. Your deposit comes back to you.",
   "no-deposit": "No deposit arrived before bidding closed, so this bid did not count.",
 };
+
+/** The same, for auctions with same-size deposits and time-locked bids. */
+const STANDING_2: Record<string, string> = {
+  ...STANDING,
+  "not-revealed": "Your bid could not be opened, so it did not count. Your deposit comes back to you.",
+  underfunded: "Your deposit was smaller than the amount every bid must deposit, so the bid did not count. Your deposit comes back to you.",
+  "over-ceiling": "Your bid was above the highest bid this auction allows, so it did not count. Your deposit comes back to you.",
+};
+
+const BOARD: Record<string, string> = { counted: "counted", "no-deposit": "no deposit", underfunded: "short deposit", unopened: "not opened" };
+
+/** How long this browser waits for the time lock to open its bid before opening it from the ticket. */
+const UNLOCK_PATIENCE_MS = 20_000;
+
+const clockTime = (ms: number) => new Date(ms).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
 /** A rounder amount above the bid, so the deposit doesn't give the bid away. */
 function roomyDeposit(amount: number): number {
@@ -87,6 +135,9 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
   const [hasKey, setHasKey] = useState(false);
   // The bid form waits for this: the server can't know whether this browser is the seller's.
   const [mounted, setMounted] = useState(false);
+  // A private auction: the invite this browser holds, and the listing it opened with it.
+  const [invite, setInvite] = useState<string | null>(null);
+  const [listing, setListing] = useState<ListingText | "locked" | null>(null);
   const id = auction.id;
 
   useEffect(() => {
@@ -109,12 +160,13 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
     manageKey.current = key && /^[0-9a-f]{64}$/.test(key) ? key : null;
     setHasKey(manageKey.current !== null);
     setMounted(true);
+    void inviteFor(id).then(setInvite);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch(`/api/auctions/${id}`);
+      const res = await fetch(`/api/auctions/${id}`, { headers: await inviteHeaders(id) });
       if (res.ok) {
         const body = await res.json();
         setAuction(body.auction);
@@ -128,7 +180,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
     await Promise.all(
       mine.map(async (t) => {
         try {
-          const res = await fetch(`/api/auctions/${id}/bids/${t.bid_id}`, { headers: { "x-bid-token": await bidToken(t.nonce) } });
+          const res = await fetch(`/api/auctions/${id}/bids/${t.bid_id}`, { headers: { "x-bid-token": await tokenOf(t) } });
           if (res.ok) next[t.bid_id] = (await res.json()).bid;
         } catch {
           /* next poll */
@@ -158,10 +210,24 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
   }, [refresh, auction.state, auction.paid]);
 
   // Reveal: once bidding has closed, open each of this browser's bids.
+  // With time-locked bids the server opens them itself; this is then the
+  // fallback, used only for a bid the lock has not opened after a short wait.
   useEffect(() => {
     if (auction.state !== "revealing") return;
+    const closedAt = (auction.reveal_ends_at ?? 0) - auction.reveal_seconds * 1000;
     for (const t of tickets) {
-      if (views[t.bid_id]?.revealed || revealing.current.has(t.bid_id)) continue;
+      const v = views[t.bid_id];
+      if (v?.revealed || revealing.current.has(t.bid_id)) continue;
+      // Everything else here is the site's word. This is the browser's own
+      // check: a bid is never opened by hand before its own lock, or the
+      // closing time it was placed under, has passed by this browser's clock.
+      if (!mayOpenByHand(t, auction.timelock?.chain)) continue;
+      if (auction.scheme === 2) {
+        if (!v) continue; // not known yet whether the lock has opened it
+        // A bid that can't count has no reason to tell the site its amount.
+        if (v.deposit && v.deposit.counted < (auction.deposit_required ?? 0)) continue;
+        if (!v.unopenable && Date.now() + offset < closedAt + UNLOCK_PATIENCE_MS) continue;
+      }
       revealing.current.add(t.bid_id);
       void (async () => {
         try {
@@ -180,15 +246,51 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
         }
       })();
     }
-  }, [auction.state, tickets, views, id, refresh]);
+  }, [auction.state, auction.scheme, auction.deposit_required, auction.reveal_ends_at, auction.reveal_seconds, offset, tickets, views, id, refresh]);
+
+  // A private auction's title and description are opened here, with the key from the invite link. The site never could.
+  const sealedListing = auction.private?.listing ?? null;
+  useEffect(() => {
+    if (!sealedListing) return setListing(null);
+    if (!invite) return;
+    let stop = false;
+    decryptListing(invite, sealedListing)
+      .then((text) => !stop && setListing(text))
+      .catch(() => !stop && setListing("locked"));
+    return () => {
+      stop = true;
+    };
+  }, [sealedListing, invite]);
+  const isPrivate = !!auction.private;
+  const title = isPrivate ? (listing && listing !== "locked" ? listing.title : "Private auction") : auction.title;
+  const description = isPrivate ? (listing && listing !== "locked" ? listing.description : "") : auction.description;
+  useEffect(() => {
+    if (isPrivate && listing && listing !== "locked") document.title = `${listing.title} · Dark Vault`;
+  }, [isPrivate, listing]);
+  const share = typeof window === "undefined" ? "" : shareLink(window.location.origin, id, isPrivate ? invite : null);
 
   const label = stateLabel(auction);
   const hasDelivery = !!auction.delivery;
-  const steps = hasDelivery ? ["Sealed bids", "Reveal", "Settle", "Deliver", "Paid"] : ["Sealed bids", "Reveal", "Settle", "Paid"];
+  const s2 = auction.scheme === 2;
+  const lock = auction.timelock;
+  // Checked here against the key built into this page, not taken from the server's word.
+  const testBeacon = !!lock && !isPublicBeacon(lock.chain);
+  const unlock = s2 ? "Unlock" : "Reveal";
+  const steps = hasDelivery ? ["Sealed bids", unlock, "Settle", "Deliver", "Paid"] : ["Sealed bids", unlock, "Settle", "Paid"];
   const stepIndex = { funding: -1, open: 0, revealing: 1, settling: 2, delivering: 3, settled: steps.length - 1 }[auction.state];
   const sellerBond = auction.delivery?.seller_bond ?? 0;
   const buyerBond = auction.delivery?.buyer_bond ?? 0;
   const cancelled = !!auction.outcome?.cancelled;
+  // This browser's own bids on the board.
+  const mine = new Set<string>();
+  if (s2)
+    for (const t of tickets) {
+      try {
+        mine.add(pedersenCommit(id, t.amount, t.nonce));
+      } catch {
+        /* not a ticket for this kind of auction */
+      }
+    }
   const paid = auction.paid === "mined" || auction.paid === "nothing-to-pay";
   const stage = auction.delivery?.stage;
 
@@ -201,10 +303,22 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
             {(auction.state === "revealing" || auction.state === "settling" || auction.state === "delivering") && <i className="dot amber" />}
             {label.text}
           </span>
-          <h1 style={{ marginTop: 14 }}>{auction.title}</h1>
-          {auction.description && (
-            <p className="muted" style={{ whiteSpace: "pre-wrap", maxWidth: 640 }}>
-              {auction.description}
+          {isPrivate && (
+            <span className="badge private-tag" id="private-badge" style={{ marginLeft: 8 }}>
+              Private
+            </span>
+          )}
+          <h1 style={{ marginTop: 14 }} id="auction-title">
+            {title}
+          </h1>
+          {description && (
+            <p className="muted" style={{ whiteSpace: "pre-wrap", maxWidth: 640 }} id="auction-description">
+              {description}
+            </p>
+          )}
+          {listing === "locked" && (
+            <p className="error small" id="listing-locked">
+              This browser&apos;s invite could not open the listing. Open the invite link the seller gave you again.
             </p>
           )}
         </div>
@@ -217,6 +331,9 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               <span className="muted small">
                 Bidding opens when the seller&apos;s bond of {formatCoins(sellerBond)} TAZ has arrived. Check back in a few minutes.
               </span>
+              <p className="clock-min">
+                Lowest bid that can win: <strong>{formatCoins(auction.reserve)} TAZ</strong>
+              </p>
             </>
           )}
           {auction.state === "open" && (
@@ -225,10 +342,34 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               <div className="big">
                 <Countdown to={auction.ends_at} offset={offset} onDone={() => void refresh()} />
               </div>
-              <span className="muted small">Bids stay sealed until then.</span>
+              <span className="muted small">
+                {s2 ? "Bids are locked in time until then. Nobody can open one early, this site included." : "Bids stay sealed until then."}
+              </span>
+              <p className="clock-min" id="clock-min">
+                Lowest bid that can win: <strong>{formatCoins(auction.reserve)} TAZ</strong>
+                {s2 && (
+                  <>
+                    <br />
+                    Every bidder deposits: <strong>{formatCoins(auction.deposit_required ?? 0)} TAZ</strong>
+                  </>
+                )}
+              </p>
             </>
           )}
-          {auction.state === "revealing" && (
+          {auction.state === "revealing" && s2 && (
+            <>
+              <span className="muted small">Bidding is closed</span>
+              <div className="big" id="unlocking">
+                Opening bids…
+              </div>
+              <span className="muted small">
+                {lock?.beacon ? "The time lock has opened." : "Waiting for the time lock to open."} {auction.revealed} of {auction.funded ?? auction.bids} funded
+                bids opened. A bid the lock can&apos;t open can be opened by its bidder for another{" "}
+                <Countdown to={auction.reveal_ends_at ?? 0} offset={offset} onDone={() => void refresh()} />.
+              </span>
+            </>
+          )}
+          {auction.state === "revealing" && !s2 && (
             <>
               <span className="muted small">Bidding is closed. Bidders reveal within</span>
               <div className="big">
@@ -262,7 +403,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
                     : "The highest bid won and pays what it bid."
                   : cancelled
                     ? "The seller's bond did not arrive, so bidding never opened."
-                    : auction.outcome?.counted === 0
+                    : s2 || auction.outcome?.counted === 0
                       ? "No bid met the reserve."
                       : ""}{" "}
                 {auction.state === "settling"
@@ -302,6 +443,12 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               <b>{formatCoins(auction.reserve)}</b>
               <span>reserve (TAZ)</span>
             </div>
+            {auction.ceiling != null && (
+              <div>
+                <b id="stat-ceiling">{formatCoins(auction.ceiling)}</b>
+                <span>highest bid (TAZ)</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -313,6 +460,75 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
           </li>
         ))}
       </ol>
+
+      {testBeacon && (
+        <div className="card warn" id="test-beacon">
+          <strong style={{ color: "var(--amber)" }}>TEST BEACON.</strong> This auction&apos;s bids are locked to a stand-in, not the public drand network.
+          A stand-in can be made to open early, so it locks nothing. For testing only: do not bid real value here.
+        </div>
+      )}
+
+      {auction.practice && (
+        <div className="card warn" id="practice-banner">
+          <strong style={{ color: "var(--amber)" }}>PRACTICE AUCTION.</strong> The seller and {auction.practice.bots} of the bidders (marked
+          &ldquo;house&rdquo; on the board) are run by this site, automatically, so that you have someone to bid against. Their bids are
+          sealed and locked in time like yours, they can&apos;t see what you bid, and they never bid above {formatCoins(auction.practice.bot_max)} TAZ. Everything else is the real
+          thing: shielded deposits on the Zcash testnet, a time-locked bid, a proof of the result. The coins have no value.
+        </div>
+      )}
+
+      {isPrivate && (
+        <div className="card" id="private-banner">
+          <strong style={{ color: "var(--lime)" }}>PRIVATE AUCTION.</strong> It is not listed anywhere. The title and description were encrypted in the
+          seller&apos;s browser and opened here in yours, with the key in your invite link: this site stores them but can&apos;t read them. Only
+          people who hold the invite can see this page or bid. The site still runs the auction, so it knows the reserve, the times and how
+          many bids there are. If a winner opens a dispute, their browser gives the operator the key to the description so it can be judged.
+        </div>
+      )}
+
+      {auction.delivery && (sellerBond > 0 || buyerBond > 0 || auction.practice) && (
+        <div className="card" id="stakes">
+          <h3 style={{ marginTop: 0 }}>{sellerBond > 0 || buyerBond > 0 ? "Both sides have something to lose" : "Bonds: none in a practice auction"}</h3>
+          {sellerBond > 0 || buyerBond > 0 ? (
+            <>
+              <div className="stakes">
+                <div>
+                  <span className="muted small">The seller&apos;s bond</span>
+                  <b className="mono" id="stake-seller">{formatCoins(sellerBond)} TAZ</b>
+                  <p className="small muted">
+                    Paid in before bidding opened. The seller loses it to the winner if they don&apos;t{" "}
+                    {auction.delivery.kind === "promise" ? "keep the promise" : "hand the lot over"} in time, or lose a dispute.
+                  </p>
+                </div>
+                <div>
+                  <span className="muted small">Every bidder&apos;s bond</span>
+                  <b className="mono" id="stake-buyer">{formatCoins(buyerBond)} TAZ</b>
+                  <p className="small muted">
+                    Part of every deposit. Everyone who doesn&apos;t win gets it straight back. The winner loses it to the seller if they open a
+                    dispute and lose it{auction.delivery.kind === "digital" ? "" : auction.delivery.kind === "promise" ? ", or never say what they want" : ", or never say where to send the lot"}.
+                  </p>
+                </div>
+              </div>
+              <p className="small" style={{ margin: "12px 0 0" }}>
+                A seller and a winner who both do their part get their bonds back in full.
+              </p>
+            </>
+          ) : (
+            <p className="small muted" style={{ margin: 0 }}>
+              Here the seller is this site, so nobody puts down a bond.{" "}
+              {auction.delivery.usual_bond_percent > 0 ? (
+                <>
+                  In a real auction both sides do: the seller pays in at least {auction.delivery.usual_bond_percent}% of the reserve before bidding
+                  opens, and every bid carries the same amount on top. A seller who doesn&apos;t deliver, or loses a dispute, loses their bond to
+                  the winner. A winner who opens a dispute and loses it loses theirs to the seller. Honest parties get theirs back.
+                </>
+              ) : (
+                <>In a real auction the price is still held until the lot is handed over, and a dispute is decided by the operator.</>
+              )}
+            </p>
+          )}
+        </div>
+      )}
 
       {!auction.signer_online && (
         <div className="card bad">
@@ -327,8 +543,8 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               <h3>You are the seller</h3>
               <p className="small muted" id="seller-private">
                 <strong style={{ color: "var(--amber)" }}>Private view.</strong> This browser holds your seller key. Never share your seller link:
-                anyone who has it can act as the seller. Give bidders the public link instead.{" "}
-                <Copy text={typeof window === "undefined" ? "" : `${window.location.origin}/auction/${id}`} label="Copy the public link" />
+                anyone who has it can act as the seller. Give bidders the {isPrivate ? "invite link" : "public link"} instead.{" "}
+                <Copy text={share} label={isPrivate ? "Copy the invite link" : "Copy the public link"} />
               </p>
               {auction.state === "funding" && seller.bond && <BondFunding bond={seller.bond} />}
               {seller.bond && auction.state !== "funding" && !seller.proceeds && (
@@ -378,21 +594,22 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
           )}
 
           {tickets.map((t) => (
-            <MyBid key={t.bid_id} ticket={t} view={views[t.bid_id]} auction={auction} note={revealNote[t.bid_id]} refresh={() => void refresh()} />
+            <MyBid key={t.bid_id} ticket={t} view={views[t.bid_id]} auction={auction} title={title} note={revealNote[t.bid_id]} refresh={() => void refresh()} />
           ))}
 
           {/* The seller's view offers no bid form: a seller doesn't bid on their own lot. */}
           {auction.state === "open" && mounted && !seller && !hasKey && <BidForm auction={auction} onPlaced={(all) => (setTickets(all), void refresh())} hasBids={tickets.length > 0} />}
           {auction.state === "open" && seller && (
             <p className="muted small" id="seller-no-bid">
-              Bidding is switched off in your seller view. Bidders use the public link.
+              Bidding is switched off in your seller view. Bidders use the {isPrivate ? "invite link" : "public link"}.
             </p>
           )}
 
           {auction.state !== "open" && tickets.length === 0 && !seller && (
             <div className="card">
               <p style={{ margin: 0 }}>
-                Bidding is closed. If you bid from another browser, restore your bid from its ticket file to reveal it and see your result.
+                Bidding is closed. If you bid from another browser, restore your bid from its ticket file to {s2 ? "" : "reveal it and "}see
+                your result.
               </p>
             </div>
           )}
@@ -401,10 +618,13 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
         </div>
 
         <div>
+          {mounted && !cancelled && <ShareCard link={share} isPrivate={isPrivate} ready={!isPrivate || !!invite} open={auction.state === "open" || auction.state === "funding"} />}
+          {s2 && <VerifyResult auction={auction} tickets={tickets} />}
           <div className="card">
             <h3>The board</h3>
             <p className="muted small">
               Every sealed bid, as the commitment the bidder&apos;s browser made. It hides the amount and can&apos;t be changed afterwards.
+              {auction.board && " Next to each: whether it counted in the result."}
             </p>
             {auction.commitments.length === 0 ? (
               <p className="muted small" style={{ margin: 0 }}>
@@ -412,33 +632,64 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               </p>
             ) : (
               <ol className="board" id="board">
-                {auction.commitments.map((c, i) => (
-                  <li key={c}>
-                    <b>#{i + 1}</b>
-                    <span>{c}</span>
-                  </li>
-                ))}
+                {auction.commitments.map((c, i) => {
+                  const won = auction.outcome?.winner_position === i + 1;
+                  const status = auction.board?.[i];
+                  return (
+                    <li key={c} className={mine.has(c) ? "mine" : undefined}>
+                      <b>#{i + 1}</b>
+                      <span>{c}</span>
+                      {auction.practice?.house_positions.includes(i + 1) && <em className="house">house</em>}
+                      {status && <em className={won ? "won" : status === "counted" ? undefined : "out"}>{won ? "won" : BOARD[status]}</em>}
+                    </li>
+                  );
+                })}
               </ol>
             )}
           </div>
+          {s2 && lock && (
+            <div className="card" id="timelock-card">
+              <h3>The time lock</h3>
+              <p className="muted small" style={{ margin: 0 }}>
+                Each bid is encrypted, in the bidder&apos;s browser, to round <span className="mono">{lock.round}</span> of{" "}
+                {testBeacon ? "a test beacon" : "the drand network (the League of Entropy, about twenty independent organisations)"}. That round
+                is signed at <span className="mono">{clockTime(lock.opens_at)}</span>, just after bidding ends, and its signature is the only
+                key. {lock.beacon ? "It has been signed, and the bids were opened with it." : "Until then it does not exist, so no bid can be opened: not by this site, not by anyone."}
+              </p>
+            </div>
+          )}
           <div className="card">
             <h3>How this auction works</h3>
-            <p className="muted small" style={{ margin: 0 }}>
-              Bids are sealed and funded by a shielded deposit. When bidding closes, bidders reveal. The highest bid at or above the
-              reserve wins and pays exactly what it bid. One shielded transaction then returns every other deposit and{" "}
-              {auction.delivery ? "sets the price aside for the seller" : "pays the seller"}, so the site keeps nothing. Each payment carries an
-              equal share of the network fee (about 0.00005 TAZ).
-            </p>
+            {s2 ? (
+              <p className="muted small" style={{ margin: 0 }} id="how-it-works">
+                Each bid is sealed in the bidder&apos;s browser and locked in time. Every bidder deposits the same amount,{" "}
+                {formatCoins(auction.deposit_required ?? 0)} TAZ, in a shielded payment, so a deposit says nothing about the bid behind it. When
+                bidding closes the lock opens. The highest bid at or above the reserve wins and pays exactly what it bid; of two equal bids,
+                the one placed first. The site then publishes a proof that the highest bid won, which your browser checks, and the losing
+                bids are never shown. One shielded transaction returns every other deposit and{" "}
+                {auction.delivery ? "sets the price aside for the seller" : "pays the seller"}, so the site keeps nothing. Each payment carries
+                an equal share of the network fee (about 0.00005 TAZ).
+              </p>
+            ) : (
+              <p className="muted small" style={{ margin: 0 }}>
+                Bids are sealed and funded by a shielded deposit. When bidding closes, bidders reveal. The highest bid at or above the
+                reserve wins and pays exactly what it bid. One shielded transaction then returns every other deposit and{" "}
+                {auction.delivery ? "sets the price aside for the seller" : "pays the seller"}, so the site keeps nothing. Each payment carries an
+                equal share of the network fee (about 0.00005 TAZ).
+              </p>
+            )}
             {auction.delivery && (
               <p className="muted small" style={{ margin: "10px 0 0" }} id="delivery-terms">
                 <strong style={{ color: "var(--text)" }}>{auction.delivery.kind === "digital" ? "Digital lot." : auction.delivery.kind === "promise" ? "A promise." : "Physical lot."}</strong> The
                 seller is not paid at the close: the price is held until {auction.delivery.kind === "promise" ? "the promise is kept" : "the lot is handed over"}.{" "}
                 {auction.delivery.kind === "digital"
-                  ? "The lot was encrypted in the seller's browser. After the sale the seller's browser sends the key, sealed so only the winner can open it. If the key doesn't arrive, or doesn't open the lot, the winner is refunded."
+                  ? auction.practice
+                    ? "Here the seller is this site: it encrypted the lot itself and, after the sale, sends the key sealed so only the winner can open it. In a real auction the seller's browser does both, and the site can't read the lot."
+                    : "The lot was encrypted in the seller's browser. After the sale the seller's browser sends the key, sealed so only the winner can open it. If the key doesn't arrive, or doesn't open the lot, the winner is refunded."
                   : auction.delivery.kind === "promise"
                     ? "The winner tells the seller what they want, sealed so only the seller can read it. If the seller doesn't do it in time, the winner is refunded; a dispute is decided by the operator."
                     : "The winner sends shipping details sealed so only the seller can read them. If the seller doesn't ship in time, the winner is refunded; a dispute is decided by the operator."}{" "}
-                Time limits: {span(auction.delivery.deliver_seconds)} to hand over, then {span(auction.delivery.dispute_seconds)} to complain.
+                Time limits: {span(auction.delivery.deliver_seconds)} to hand over, then {span(auction.delivery.dispute_seconds)} for the winner to open a dispute.
               </p>
             )}
             {sellerBond > 0 && (
@@ -453,6 +704,50 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
         </div>
       </div>
     </>
+  );
+}
+
+/** The link to hand to bidders, as text and as a QR code. Drawn here in the browser: the link is sent nowhere. */
+function ShareCard({ link, isPrivate, ready, open }: { link: string; isPrivate: boolean; ready: boolean; open: boolean }) {
+  const [qr, setQr] = useState(false);
+  return (
+    <div className="card" id="share-card">
+      <h3>{isPrivate ? "Invite someone" : "Share this auction"}</h3>
+      {isPrivate ? (
+        <p className="small muted" id="share-warning">
+          <strong style={{ color: "var(--amber)" }}>This link is the invite.</strong> Anyone who has it can see what is being sold and bid, and can pass
+          it on. Send it only to the people you want here. It carries no bid and no wallet: yours stay in this browser.
+        </p>
+      ) : (
+        <p className="small muted">
+          {open ? "Anyone with this link can bid." : "Anyone with this link can see the result and check its proof."} It carries nothing of yours: your
+          bids and tickets stay in this browser.
+        </p>
+      )}
+      {ready ? (
+        <>
+          <div className="addr" id="share-link">
+            {link}
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <Copy text={link} label={isPrivate ? "Copy the invite link" : "Copy the link"} />
+            <button type="button" className="link small" id="share-qr-toggle" onClick={() => setQr((q) => !q)}>
+              {qr ? "Hide the QR code" : "Show a QR code"}
+            </button>
+          </div>
+          {qr && (
+            <div style={{ marginTop: 12 }} id="share-qr">
+              <Qr value={link} size={190} />
+              <p className="hint">Scan it with a phone camera to open this auction there.</p>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="small muted" style={{ margin: 0 }}>
+          This browser doesn&apos;t hold the invite, so it has no link to share.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -499,6 +794,20 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
+  // Practice auctions: a practice wallet can stand in for the bidder's own.
+  const [pw, setPw] = useState<WalletView | null>(null);
+  const [ownWallet, setOwnWallet] = useState(false);
+  const [making, setMaking] = useState(false);
+  const isPractice = !!auction.practice;
+  useEffect(() => {
+    if (!isPractice) return;
+    const load = () => void practiceWallet().then(setPw).catch(() => {});
+    load();
+    window.addEventListener(WALLET_EVENT, load);
+    return () => window.removeEventListener(WALLET_EVENT, load);
+  }, [isPractice]);
+  const withPractice = isPractice && !!pw && !ownWallet;
+  const required = auction.deposit_required ?? 0;
 
   // A connected wallet's saved address is filled in; it can still be replaced.
   useEffect(() => {
@@ -520,8 +829,11 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
         ? "Enter an amount like 0.05"
         : zat < Math.max(MIN_BID, auction.reserve)
           ? `A bid below the reserve (${formatCoins(auction.reserve)} TAZ) can't win`
-          : null;
-  const ready = zat !== null && !problem && refund.trim().length > 20 && !busy;
+          : auction.ceiling != null && zat > auction.ceiling
+            ? `The highest bid this auction allows is ${formatCoins(auction.ceiling)} TAZ`
+            : null;
+  const short = withPractice && pw!.balance < required;
+  const ready = zat !== null && !problem && (withPractice ? !short && pw!.bids_left > 0 : refund.trim().length > 20) && !busy;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -530,19 +842,53 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
     setError(null);
     try {
       // All of this happens here, in the browser. Only the commitment, the
-      // hash of a token and the refund address are sent.
-      const nonce = newNonce();
-      const commitment = await commit(auction.id, zat, nonce);
-      const token_hash = await sha256Hex(await bidToken(nonce));
+      // time-locked bid, the hash of a token and the refund address are sent.
+      let nonce: string;
+      let commitment: string;
+      let sealed: string | undefined;
+      if (auction.scheme === 2) {
+        const lock = auction.timelock;
+        if (!lock) throw new Error("this auction has no time lock yet. Reload the page and try again.");
+        // Checked here, not taken on trust. For the public network, its key
+        // and its clock are the constants built into this page; the lock must
+        // open after bidding ends, and must not have opened already.
+        const chain = trustedChain(lock.chain);
+        if (lock.round < roundAfter(chain, auction.ends_at) || roundTimeMs(chain, lock.round) <= Date.now())
+          throw new Error("this auction's time lock would open before bidding ends. Don't bid here.");
+        nonce = newBlinding();
+        commitment = pedersenCommit(auction.id, zat, nonce);
+        sealed = await sealBid(chain, lock.round, zat, nonce);
+      } else {
+        nonce = newNonce();
+        commitment = await commit(auction.id, zat, nonce);
+      }
+      // The access token has a secret of its own: the winner's nonce is published with the proof.
+      const token_secret = newId() + newId();
+      const token_hash = await sha256Hex(await bidToken(token_secret));
       // If this bid wins, the lot is sealed to this key. The private half stays in the ticket.
       const delivery_key = auction.delivery ? newDeliveryKey() : undefined;
+      const invite = auction.private ? await inviteFor(auction.id) : null;
       const res = await fetch(`/api/auctions/${auction.id}/bids`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ commitment, token_hash, refund_address: refund.trim(), ...(delivery_key ? { delivery_pub: deliveryPublic(delivery_key) } : {}) }),
+        // A private auction takes bids only from browsers that hold its invite.
+        headers: { "Content-Type": "application/json", ...(await inviteHeaders(auction.id)) },
+        body: JSON.stringify({
+          commitment,
+          token_hash,
+          // With a practice wallet the site's house purse receives the refund, for that wallet.
+          ...(withPractice ? { practice: practiceToken() } : { refund_address: refund.trim() }),
+          ...(sealed ? { sealed } : {}),
+          ...(delivery_key ? { delivery_pub: deliveryPublic(delivery_key) } : {}),
+        }),
       });
       const body = await res.json();
       if (!res.ok) throw new Error(body.error ?? "the bid was refused");
+      // The site's signed receipt: kept only if it really is this site's signature over this very bid.
+      const r = body.receipt as Receipt | undefined;
+      const receipt =
+        sealed && r && auction.site_key && verifyReceipt(auction.site_key, r) && r.auction_id === auction.id && r.commitment === commitment && r.sealed_hash === sealedHash(sealed)
+          ? r
+          : undefined;
       const all = saveTicket({
         auction_id: auction.id,
         bid_id: body.bid_id,
@@ -551,6 +897,12 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
         deposit_address: body.deposit_address,
         placed_at: Date.now(),
         ...(delivery_key ? { delivery_key } : {}),
+        ...(receipt ? { receipt, site_key: auction.site_key ?? undefined } : {}),
+        ...(sealed ? { sealed } : {}),
+        token_secret,
+        closes_at: auction.ends_at,
+        ...(withPractice ? { practice: true } : {}),
+        ...(auction.private && invite ? { invite } : {}),
       });
       setAmount("");
       setRefund(saved ?? "");
@@ -578,18 +930,75 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
     <form onSubmit={submit} className="card" id="bid-form">
       <h3>{hasBids ? "Place another bid" : "Place a sealed bid"}</h3>
       <p className="muted small">
-        One sealed number. If it is the highest, you win and pay exactly that. Nobody sees it until bidding has closed, and nothing
-        anyone else bids can change what you pay.
+        One sealed number. If it is the highest, you win and pay exactly that. {auction.scheme === 2 ? "Nobody can open it" : "Nobody sees it"} until
+        bidding has closed, and nothing anyone else bids can change what you pay.
       </p>
       <label htmlFor="amount">Your bid (TAZ)</label>
       <input id="amount" inputMode="decimal" autoComplete="off" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={formatCoins(auction.reserve)} />
       <p className={problem ? "hint error" : "hint"}>
         {problem ??
-          (auction.delivery && auction.delivery.buyer_bond > 0
-            ? `Stays in this browser until bidding closes. You will deposit your bid plus a bond of ${formatCoins(auction.delivery.buyer_bond)} TAZ, which comes back unless you open a dispute and lose it.`
-            : "Stays in this browser until bidding closes.")}
+          (auction.scheme === 2
+            ? `Between ${formatCoins(auction.reserve)} and ${formatCoins(auction.ceiling ?? 0)} TAZ. Whatever you bid, you deposit ${formatCoins(auction.deposit_required ?? 0)} TAZ, the same as every bidder${
+                auction.delivery && auction.delivery.buyer_bond > 0 ? ` (it includes a bond of ${formatCoins(auction.delivery.buyer_bond)} TAZ, which comes back unless you open a dispute and lose it)` : ""
+              }. What you don't owe comes back.`
+            : auction.delivery && auction.delivery.buyer_bond > 0
+              ? `Stays in this browser until bidding closes. You will deposit your bid plus a bond of ${formatCoins(auction.delivery.buyer_bond)} TAZ, which comes back unless you open a dispute and lose it.`
+              : "Stays in this browser until bidding closes.")}
       </p>
 
+      {isPractice && !pw && (
+        <div id="practice-offer" style={{ margin: "14px 0 4px" }}>
+          <p className="small" style={{ marginBottom: 8 }}>
+            <strong>No testnet coins?</strong> A practice wallet gives you testnet coins to bid with in practice auctions, enough for three
+            bids at once. The site holds it for you, so it is for practice only.
+          </p>
+          <button
+            type="button"
+            id="practice-make"
+            disabled={making}
+            onClick={async () => {
+              setMaking(true);
+              setError(null);
+              try {
+                setPw(await makePracticeWallet());
+              } catch (e) {
+                setError(e instanceof Error ? e.message : String(e));
+              } finally {
+                setMaking(false);
+              }
+            }}
+          >
+            {making ? "Making it…" : "Get a practice wallet"}
+          </button>
+          <p className="hint">Or bid with your own wallet: give a refund address below.</p>
+        </div>
+      )}
+      {isPractice && pw && (
+        <>
+          <label>Pay the deposit with</label>
+          <div className="pay-with" id="pay-with">
+            <label className={!ownWallet ? "on" : undefined}>
+              <input type="radio" name="pay-with" checked={!ownWallet} onChange={() => setOwnWallet(false)} /> Practice wallet ·{" "}
+              <span className="mono">{formatCoins(pw.balance)} TAZ</span>
+            </label>
+            <label className={ownWallet ? "on" : undefined}>
+              <input type="radio" name="pay-with" checked={ownWallet} onChange={() => setOwnWallet(true)} /> My own wallet
+            </label>
+          </div>
+          {withPractice && (
+            <p className={short || pw.bids_left <= 0 ? "hint error" : "hint"} id="practice-hint">
+              {pw.bids_left <= 0
+                ? "This practice wallet has funded all the bids it can. Use your own wallet."
+                : short
+                  ? `Your practice wallet holds ${formatCoins(pw.balance)} TAZ, less than the ${formatCoins(required)} TAZ a bid deposits. Deposits come back when their auctions settle.`
+                  : "The site's house purse pays your deposit and gets the refund, on your practice wallet's account. The site can tell which practice bids are yours."}
+            </p>
+          )}
+        </>
+      )}
+
+      {!withPractice && (
+        <>
       <label htmlFor="refund">Your shielded refund address</label>
       <input id="refund" className="mono" value={refund} onChange={(e) => setRefund(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
       <p className="hint">
@@ -605,13 +1014,15 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
           </>
         )}
       </p>
+        </>
+      )}
 
       {error && <p className="error">{error}</p>}
       <div className="row" style={{ marginTop: 18 }}>
         <button className="primary lg" disabled={!ready}>
           {busy ? (
             <>
-              <span className="spinner" aria-hidden="true" /> Sealing…
+              <span className="spinner" aria-hidden="true" /> {auction.scheme === 2 ? "Sealing and locking…" : "Sealing…"}
             </>
           ) : (
             "Seal my bid"
@@ -622,14 +1033,49 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
   );
 }
 
-function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?: BidView; auction: PublicAuction; note?: string; refresh: () => void }) {
+function MyBid({ ticket, view, auction, title, note, refresh }: { ticket: Ticket; view?: BidView; auction: PublicAuction; title: string; note?: string; refresh: () => void }) {
   const deposit = view?.deposit;
   const funded = (deposit?.total ?? 0) > 0;
   const bond = auction.delivery?.buyer_bond ?? 0;
-  const needed = ticket.amount + bond;
-  const enough = (deposit?.counted ?? 0) >= needed;
-  const roomy = roomyDeposit(needed);
+  const s2 = auction.scheme === 2;
+  // Same-size deposits: everyone deposits the same amount. Before: at least the bid plus the bond.
+  const needed = s2 ? (auction.deposit_required ?? 0) : ticket.amount + bond;
+  const enough = (deposit?.total ?? 0) >= needed;
+  const roomy = s2 ? needed : roomyDeposit(needed);
   const uri = paymentRequest(ticket.deposit_address, formatCoins(roomy));
+  const receipt = ticket.receipt ?? null;
+  // A bid placed with a practice wallet: the house purse pays its deposit when asked.
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [sentNow, setSentNow] = useState(false);
+  const practicePaid = sentNow || !!view?.practice?.paid;
+  // Past this moment a deposit would not reach a block before the close, so the site no longer sends one.
+  const payUntil = auction.practice?.pay_until ?? auction.ends_at;
+  const tooLate = Date.now() > payUntil;
+  const closingSoon = !tooLate && payUntil - Date.now() < 60_000;
+  async function payPractice() {
+    setPaying(true);
+    setPayError(null);
+    try {
+      const res = await fetch(`/api/auctions/${auction.id}/bids/${ticket.bid_id}/practice-pay`, {
+        method: "POST",
+        headers: { "x-bid-token": await tokenOf(ticket), "x-practice-token": practiceToken() ?? "" },
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        // An answer that isn't the site's own (no JSON) means the request never reached it: say so, don't blame the wallet.
+        if (!body) throw new Error(`The site didn't answer as expected (${res.status}). Reload the page and try again.`);
+        throw new Error(res.status === 404 ? "This browser no longer holds the practice wallet this bid was placed with." : (body.error ?? "the deposit could not be sent"));
+      }
+      setSentNow(true);
+      window.dispatchEvent(new Event(WALLET_EVENT)); // the wallet panel's balance has changed
+      refresh();
+    } catch (e) {
+      setPayError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPaying(false);
+    }
+  }
 
   return (
     <div className={`card ${view?.standing === "won" ? "accent" : ""}`} data-bid={ticket.bid_id}>
@@ -638,13 +1084,55 @@ function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?
         <strong className="mono">{formatCoins(ticket.amount)} TAZ</strong>
       </div>
 
-      {auction.state === "open" && !funded && (
-        <>
-          <p className="small" style={{ marginTop: 12 }}>
-            <strong>Now fund it.</strong> Send <strong>at least {formatCoins(needed)} TAZ</strong>
-            {bond > 0 && <> (your bid plus the {formatCoins(bond)} TAZ bond)</>} from a shielded balance to the
-            address below, with no memo. It was made for this bid alone.
+      {auction.state === "open" && !funded && ticket.practice && (
+        <div id="practice-fund" style={{ marginTop: 12 }}>
+          <p className="small">
+            <strong>Now fund it.</strong> Every bidder deposits <strong>{formatCoins(needed)} TAZ</strong>, whatever they bid, so a deposit says
+            nothing about the bid. Your practice wallet pays it: a real shielded payment from the site&apos;s house purse to an address made
+            for this bid alone.
           </p>
+          {practicePaid ? (
+            <p className="small ok" id="practice-sent" style={{ margin: 0 }}>
+              Sent. It counts once it is in a block, which takes about 75 seconds on the testnet.
+            </p>
+          ) : (
+            <>
+              <button type="button" className="primary" id="practice-pay" disabled={paying || tooLate} onClick={() => void payPractice()}>
+                {paying ? (
+                  <>
+                    <span className="spinner" aria-hidden="true" /> Sending…
+                  </>
+                ) : (
+                  `Pay ${formatCoins(needed)} TAZ from my practice wallet`
+                )}
+              </button>
+              {tooLate ? (
+                <p className="hint error" id="practice-late">
+                  Bidding closes too soon for a deposit to reach a block in time, so this bid won&apos;t count. Try the next practice auction.
+                </p>
+              ) : (
+                closingSoon && <p className="hint error">Pay now: in under a minute it will be too late for the deposit to reach a block before the close.</p>
+              )}
+            </>
+          )}
+          {payError && <p className="error small">{payError}</p>}
+        </div>
+      )}
+      {auction.state === "open" && !funded && !ticket.practice && (
+        <>
+          {s2 ? (
+            <p className="small" style={{ marginTop: 12 }} id="fund-it">
+              <strong>Now fund it.</strong> Send <strong>exactly {formatCoins(needed)} TAZ</strong> from a shielded balance to the address below, with
+              no memo. Every bidder sends this same amount (the highest bid allowed{bond > 0 && <>, plus the {formatCoins(bond)} TAZ bond</>}),
+              so your deposit says nothing about your bid, even to this site. What you don&apos;t owe comes back when the auction settles.
+            </p>
+          ) : (
+            <p className="small" style={{ marginTop: 12 }}>
+              <strong>Now fund it.</strong> Send <strong>at least {formatCoins(needed)} TAZ</strong>
+              {bond > 0 && <> (your bid plus the {formatCoins(bond)} TAZ bond)</>} from a shielded balance to the
+              address below, with no memo. It was made for this bid alone.
+            </p>
+          )}
           <div className="row" style={{ alignItems: "flex-start" }}>
             <Qr value={uri} size={150} />
             <div className="grow">
@@ -660,13 +1148,31 @@ function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?
                 The button opens your Zcash wallet app with this address and {formatCoins(roomy)} TAZ filled in. No wallet app on this device?
                 Scan the code with your phone.
               </p>
-              <p className="hint">
-                Sending more hides your bid from this site, which can see deposits: for example {formatCoins(roomy)} TAZ. Whatever you send
-                above your bid comes back to your refund address.
-              </p>
+              {!s2 && (
+                <p className="hint">
+                  Sending more hides your bid from this site, which can see deposits: for example {formatCoins(roomy)} TAZ. Whatever you send
+                  above your bid comes back to your refund address.
+                </p>
+              )}
             </div>
           </div>
         </>
+      )}
+
+      {s2 && !ticket.practice && (auction.state === "open" || auction.state === "revealing" || auction.state === "settling") && needed > ticket.amount && (
+        <div className="deposit-math" id="deposit-math">
+          <strong>The deposit is not the price.</strong> You deposit {formatCoins(needed)} TAZ, the same as every bidder, so nobody can tell what you bid.
+          <ul>
+            <li>
+              If you win, you pay your bid, <strong>{formatCoins(ticket.amount)} TAZ</strong>, and <strong>{formatCoins(needed - ticket.amount)} TAZ</strong> comes back
+              {bond > 0 ? ` (${formatCoins(needed - ticket.amount - bond)} at the close, the ${formatCoins(bond)} bond after the handover)` : ""}.
+            </li>
+            <li>
+              If you don&apos;t win, all <strong>{formatCoins(needed)} TAZ</strong> comes back.
+            </li>
+          </ul>
+          <span className="muted">A small network fee (about 0.00008 TAZ) comes off what is returned.</span>
+        </div>
       )}
 
       <dl className="kv" style={{ marginTop: 14 }}>
@@ -686,25 +1192,55 @@ function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?
         )}
         <dt>Bid</dt>
         <dd className="reveal-status">
-          {view?.revealed ? "revealed" : auction.state === "open" ? "sealed" : auction.state === "revealing" ? "revealing…" : "not revealed"}
+          {s2
+            ? view?.revealed
+              ? view.opened_by === "beacon"
+                ? "opened by the time lock"
+                : "opened from your ticket"
+              : auction.state === "open"
+                ? "sealed and locked in time"
+                : auction.state === "revealing"
+                  ? "opening…"
+                  : "not opened"
+            : view?.revealed
+              ? "revealed"
+              : auction.state === "open"
+                ? "sealed"
+                : auction.state === "revealing"
+                  ? "revealing…"
+                  : "not revealed"}
         </dd>
-        <dt>Refund address</dt>
-        <dd>{view?.refund_address ?? "…"}</dd>
+        {s2 && (
+          <>
+            <dt>Receipt</dt>
+            <dd className="receipt-status">
+              {receipt ? `#${receipt.position} on the board · signed` : "the site gave no valid receipt"}
+            </dd>
+          </>
+        )}
+        <dt>Refund {ticket.practice ? "goes to" : "address"}</dt>
+        <dd>{ticket.practice ? "your practice wallet" : (view?.refund_address ?? "…")}</dd>
       </dl>
 
       {funded && !enough && auction.state === "open" && (
         <p className="error small" style={{ marginBottom: 0 }}>
-          Your deposit is smaller than your bid{bond > 0 ? " plus the bond" : ""} ({formatCoins(needed)} TAZ). Send the difference to the same address
-          before bidding closes, or this bid won&apos;t count.
+          {s2 ? `Your deposit is smaller than the ${formatCoins(needed)} TAZ every bid must deposit.` : `Your deposit is smaller than your bid${bond > 0 ? " plus the bond" : ""} (${formatCoins(needed)} TAZ).`}{" "}
+          Send the difference to the same address before bidding closes, or this bid won&apos;t count.
         </p>
       )}
-      {note && <p className="error small">Couldn&apos;t reveal yet: {note}</p>}
+      {note && <p className="error small">Couldn&apos;t {s2 ? "open your bid" : "reveal"} yet: {note}</p>}
 
       {view?.standing && (
         <div style={{ marginTop: 14 }} className="standing">
           <p style={{ marginBottom: 8 }}>
-            <strong className={view.standing === "won" ? "ok" : undefined}>{STANDING[view.standing]}</strong>
-            {view.standing === "won" && auction.outcome?.price != null && <> You pay {formatCoins(auction.outcome.price)} TAZ, your bid.</>}
+            <strong className={view.standing === "won" ? "ok" : undefined}>{(s2 ? STANDING_2 : STANDING)[view.standing]}</strong>
+            {view.standing === "won" && auction.outcome?.price != null && (
+              <>
+                {" "}
+                You pay {formatCoins(auction.outcome.price)} TAZ, your bid.
+                {s2 && needed > auction.outcome.price && <> The rest of your {formatCoins(needed)} TAZ deposit comes back to you.</>}
+              </>
+            )}
           </p>
           {view.delivery && <WinnerDelivery auction={auction} ticket={ticket} view={view} refresh={refresh} />}
           {view.payments.length === 0 && auction.state === "settling" && funded && (
@@ -728,9 +1264,19 @@ function MyBid({ ticket, view, auction, note, refresh }: { ticket: Ticket; view?
       )}
 
       <p className="hint" style={{ marginTop: 14 }}>
-        This browser holds the only copy of your bid. Without it the bid can&apos;t be revealed and won&apos;t count (your deposit still comes back)
-        {auction.delivery?.kind === "digital" ? ", and a lot you win can't be unlocked" : ""}.{" "}
-        <button type="button" className="link small" onClick={() => download(`dark-vault-bid-${ticket.bid_id.slice(0, 8)}.txt`, ticketFile(ticket, auction.title))}>
+        {s2 ? (
+          <>
+            Your bid opens by itself when bidding closes, even with this browser shut. The ticket is your own record of it: it carries the
+            site&apos;s signed receipt, opens the bid if the time lock can&apos;t
+            {auction.delivery?.kind === "digital" ? ", and unlocks a lot you win" : ""}.
+          </>
+        ) : (
+          <>
+            This browser holds the only copy of your bid. Without it the bid can&apos;t be revealed and won&apos;t count (your deposit still comes
+            back){auction.delivery?.kind === "digital" ? ", and a lot you win can't be unlocked" : ""}.
+          </>
+        )}{" "}
+        <button type="button" className="link small" onClick={() => download(`dark-vault-bid-${ticket.bid_id.slice(0, 8)}.txt`, ticketFile(ticket, title))}>
           Save the ticket file
         </button>
       </p>

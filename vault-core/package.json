@@ -1,11 +1,12 @@
 {
   "name": "vault-core",
   "version": "0.1.0",
-  "description": "Dark Vault: sealed-bid commitments, first-price rules, settlement plans and sealed delivery, for the browser and Node",
+  "description": "Dark Vault: sealed bids, time locks, first-price rules, a proof of the result, settlement plans and sealed delivery, for the browser and Node",
   "type": "module",
   "scripts": {
-    "test": "tsx --test test/core.test.ts",
-    "typecheck": "tsc -p . --noEmit"
+    "test": "tsx --test test/core.test.ts test/fairness.test.ts test/sealed.test.ts test/timelock.test.ts test/invite.test.ts",
+    "typecheck": "tsc -p . --noEmit",
+    "verify": "tsx bin/verify.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -17,6 +18,8 @@
   },
   "types": "./src/index.ts",
   "dependencies": {
-    "@noble/curves": "^1.9.7"
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0",
+    "tlock-js": "^0.9.0"
   }
 }

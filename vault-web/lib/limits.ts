@@ -16,6 +16,12 @@ export const LIMITS = {
   maxDurationSec: 14 * 24 * 3600,
   minRevealSec: num("VAULT_MIN_REVEAL_SEC", 5 * 60),
   maxRevealSec: 24 * 3600,
+  /** The ceiling (highest bid allowed) can be at most this many times the reserve: every bidder has to deposit it. */
+  maxCeilingMultiple: 100,
+  /** No amount in an auction can be more than all the coins there will ever be (21 million). */
+  maxAmount: 21_000_000 * 100_000_000,
+  /** A time-locked bid is about 670 characters. */
+  sealedMax: 1200,
   /** Bonds, as a percentage of the reserve (see vault-core bondFor). 0 switches bonds off. */
   bondPercent: (() => {
     const v = Number(process.env.VAULT_BOND_PERCENT ?? 10);

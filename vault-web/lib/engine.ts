@@ -19,13 +19,40 @@
 // price. The second payout returns each bond to its owner, or gives it to the
 // other side if its owner was at fault.
 //
+// Auctions of scheme 2 lock their bids in time (vault-core timelock.ts). When
+// bidding has closed, the server fetches the round's signature, opens the bids
+// itself, decides, and saves a proof that the highest bid won (fairness.ts).
+// The reveal window stays as the fallback: if the signature can't be fetched,
+// each bidder's browser opens its own bid from its ticket, as before.
+//
 // Money only moves in `settle`, `payEscrow` and `returnLateDeposits`, and only
 // as the plans from vault-core say. The signer then refuses anything that
 // doesn't add up to exactly what a vault holds.
 import "server-only";
-import { decide, FEE_SHARE_FLOOR, plan, planEscrowPayout, type Depositor, type Fault, type Outcome, type PlannedPayment, type SealedBid } from "vault-core";
+import {
+  boardStatusOf,
+  decide,
+  decideSealed,
+  FEE_SHARE_FLOOR,
+  openSealedBid,
+  pedersenOpens,
+  plan,
+  planEscrowPayout,
+  proveFairness,
+  roundAfter,
+  TooEarly,
+  verifyFairness,
+  type Depositor,
+  type FairnessStatement,
+  type Fault,
+  type Opening,
+  type Outcome,
+  type PlannedPayment,
+  type SealedBid,
+} from "vault-core";
+import { beaconChain, fetchBeacon } from "./drand";
 import { LIMITS } from "./limits";
-import { listAuctions, loadAuction, withAuction } from "./store";
+import { listAuctions, loadAuction, saveProof, withAuction } from "./store";
 import { settleVault, vaultInfo, type VaultInfo } from "./signer";
 import type { Auction, Delivery, PaymentRecord, ResolutionReason } from "./types";
 
@@ -65,7 +92,25 @@ export function moneyByBid(auction: Auction, info: VaultInfo): Map<string, BidMo
   return out;
 }
 
+/** Scheme 2: what every bid must deposit, whatever it bids. Null for older auctions. */
+export function requiredDeposit(auction: Auction): number | null {
+  return auction.scheme === 2 ? (auction.ceiling ?? 0) + (auction.delivery?.buyer_bond ?? 0) : null;
+}
+
+/**
+ * Scheme 2: fixes the time lock as bidding opens. Bids are locked to the first
+ * drand round signed after the end time, so not even this server can open one
+ * while bidding is on.
+ */
+export async function lockInTime(auction: Auction): Promise<void> {
+  if (auction.scheme !== 2) return;
+  const chain = await beaconChain();
+  auction.timelock = { chain, round: roundAfter(chain, auction.ends_at) };
+}
+
 function sealedBids(auction: Auction, money: Map<string, BidMoney>): SealedBid[] {
+  // Scheme 2: the order the bids were placed, which everyone can see on the board.
+  if (auction.scheme === 2) return auction.bids.map((b, order) => ({ id: b.id, order, deposit: money.get(b.id)?.counted ?? 0, revealed: b.reveal?.amount }));
   // Order of arrival: the height of the first deposit, then the order the bids were placed.
   const ranked = auction.bids
     .map((b, index) => ({ b, index, height: money.get(b.id)?.first_height ?? Number.MAX_SAFE_INTEGER }))
@@ -100,6 +145,7 @@ async function awaitBond(auction: Auction, now: number): Promise<void> {
     d.bond_funded_at = now;
     // Bidding time starts now, not when the form was sent.
     auction.ends_at = now + (auction.duration_seconds ?? 0) * 1000;
+    await lockInTime(auction);
     auction.state = "open";
     return;
   }
@@ -116,14 +162,80 @@ async function close(auction: Auction, now: number): Promise<void> {
   auction.state = "revealing";
 }
 
+const beaconAsked = new Map<string, number>();
+
+/**
+ * Scheme 2: opens the time-locked bids, once their round has been signed.
+ * Only bids that can count are opened (their deposit is in full): the server
+ * has no reason to learn what an unfunded bid held.
+ */
+async function openTimeLocked(auction: Auction, bids: Auction["bids"], now: number): Promise<void> {
+  const lock = auction.timelock;
+  if (!lock) return;
+  if (!lock.beacon) {
+    // Ask the relays at most every few seconds: a page view must not wait on them.
+    if (now - (beaconAsked.get(auction.id) ?? 0) < 8000) return;
+    beaconAsked.set(auction.id, now);
+    if (beaconAsked.size > 5000) beaconAsked.clear();
+    const beacon = await fetchBeacon(lock.chain, lock.round);
+    if (!beacon) return; // not signed yet, or no relay answered: try again on the next pass
+    lock.beacon = { round: beacon.round, signature: beacon.signature };
+  }
+  for (const bid of bids) {
+    if (bid.reveal || bid.unopenable || !bid.sealed) continue;
+    try {
+      const { amount, blinding } = await openSealedBid(lock.chain, bid.sealed, lock.beacon);
+      if (pedersenOpens(auction.id, bid.commitment, amount, blinding)) bid.reveal = { amount, nonce: blinding, at: now, by: "beacon" };
+      else bid.unopenable = "mismatch"; // the locked bid is not the one that was committed to
+    } catch (e) {
+      // This machine's clock is behind the beacon's: nothing is wrong with the bid. The next pass tries again.
+      if (e instanceof TooEarly) return;
+      bid.unopenable = "not-a-bid";
+    }
+  }
+}
+
+/** Scheme 2: the public statement of a result, and what the coordinator knows that proves it. */
+function fairnessStatement(auction: Auction, outcome: Outcome): { statement: FairnessStatement; openings: (Opening | undefined)[] } {
+  const statement: FairnessStatement = {
+    v: 2,
+    auction_id: auction.id,
+    reserve: auction.reserve,
+    ceiling: auction.ceiling!,
+    bids: auction.bids.map((b) => ({ commitment: b.commitment, status: boardStatusOf(outcome.standing[b.id]!) })),
+    sold: outcome.sold,
+    price: outcome.price ?? null,
+    winner: outcome.sold ? auction.bids.findIndex((b) => b.id === outcome.winnerId) : null,
+  };
+  const openings = auction.bids.map((b) => (b.reveal ? { amount: b.reveal.amount, blinding: b.reveal.nonce } : undefined));
+  return { statement, openings };
+}
+
 async function maybeDecide(auction: Auction, now: number): Promise<void> {
   const info = await vaultInfo(auction.vault_id, true);
   const money = moneyByBid(auction, info);
-  const funded = auction.bids.filter((b) => (money.get(b.id)?.counted ?? 0) > 0);
+  const required = requiredDeposit(auction);
+  // The bids worth waiting for: funded, and under scheme 2 funded in full.
+  const funded = auction.bids.filter((b) => (money.get(b.id)?.counted ?? 0) >= Math.max(1, required ?? 0));
+  if (auction.scheme === 2) await openTimeLocked(auction, funded, now);
   const everyoneRevealed = funded.every((b) => b.reveal);
   if (now < (auction.reveal_ends_at ?? 0) && !everyoneRevealed) return;
 
-  const outcome = decide(auction.reserve, sealedBids(auction, money), auction.delivery?.buyer_bond ?? 0);
+  const bond = auction.delivery?.buyer_bond ?? 0;
+  const outcome = auction.scheme === 2 ? decideSealed(auction.reserve, auction.ceiling!, sealedBids(auction, money), bond) : decide(auction.reserve, sealedBids(auction, money), bond);
+
+  if (auction.scheme === 2) {
+    // The result is published with a proof. A proof of a wrong result can't be
+    // made, so this is also a check on everything above: if it fails, nothing
+    // is decided and no money moves.
+    const { statement, openings } = fairnessStatement(auction, outcome);
+    const proof = await proveFairness(statement, openings);
+    const verdict = await verifyFairness(statement, proof);
+    if (!verdict.ok) throw new Error(`the proof of the result does not check out: ${verdict.problems[0]}`);
+    const bytes = await saveProof(auction.id, { statement, proof, timelock: auction.timelock ?? null, decided_at: now });
+    auction.proof = { at: now, bytes };
+  }
+
   auction.outcome = {
     sold: outcome.sold,
     price: outcome.price,
@@ -364,21 +476,25 @@ async function returnLateDeposits(auction: Auction, now: number): Promise<void> 
 }
 
 const lastRun: Map<string, number> = ((globalThis as Record<string, unknown>).__dvLastRun ??= new Map()) as Map<string, number>;
+/** Auctions being advanced right now. Opening bids and proving a result can take a while. */
+const busy: Set<string> = ((globalThis as Record<string, unknown>).__dvBusy ??= new Set()) as Set<string>;
 
 /**
  * Moves one auction forward as far as it can go right now.
  *
  * Page views call this too, so unless `force` is set it does nothing if the
  * auction was advanced in the last few seconds: looking at a page must not
- * turn into signer work.
+ * turn into signer work. Nor does a page view wait behind a pass that is
+ * already running: it is shown the auction as it stands.
  */
 export async function advance(id: string, force = false): Promise<Auction | null> {
   const recent = Date.now() - (lastRun.get(id) ?? 0) < 3000;
-  if (recent && !force) return loadAuction(id);
+  if ((recent || busy.has(id)) && !force) return loadAuction(id);
   lastRun.set(id, Date.now());
   if (lastRun.size > 10000) lastRun.clear();
   return withAuction(id, async (auction) => {
     const now = Date.now();
+    busy.add(id);
     try {
       // A few steps can happen in one go (for example close, then decide when nobody bid).
       for (let i = 0; i < 5; i++) {
@@ -402,6 +518,8 @@ export async function advance(id: string, force = false): Promise<Auction | null
     } catch (e) {
       // Kept for the operator; never shown to visitors. The next pass tries again.
       auction.last_error = e instanceof Error ? e.message : String(e);
+    } finally {
+      busy.delete(id);
     }
     return auction;
   });

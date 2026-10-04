@@ -3,7 +3,7 @@
 // PRIVATE fields never leave the server except to the person they belong to:
 // a bid's refund and deposit addresses, each deposit's amount, the vault id and
 // the settlement transaction id. See lib/views.ts for what each party is shown.
-import type { DeliveryVerdict, Fault, Standing } from "vault-core";
+import type { BeaconChain, DeliveryVerdict, Fault, Receipt, Standing } from "vault-core";
 
 export type AuctionState =
   | "funding" // listed, but not open yet: waiting for the seller's bond to arrive
@@ -16,8 +16,29 @@ export type AuctionState =
 export interface Bid {
   id: string;
   placed_at: number;
-  /** SHA-256 commitment to the amount. Public. */
+  /**
+   * The commitment to the amount. Public.
+   * Scheme 2: a Pedersen commitment (vault-core fairness.ts). Before: SHA-256.
+   */
   commitment: string;
+  /**
+   * Scheme 2. PRIVATE. The amount and blinding, encrypted in the bidder's
+   * browser so that nobody, this server included, can open them before the
+   * auction's time-lock round. Never published: after the close it would give
+   * away the losing bids.
+   */
+  sealed?: string;
+  /** Scheme 2. The time-locked bid was opened, or tried, and could not be used: it was not a bid, or did not match the commitment. */
+  unopenable?: "not-a-bid" | "mismatch";
+  /** Scheme 2. What the site signed when it accepted this bid. Shown to its bidder. */
+  receipt?: Receipt;
+  /**
+   * PRIVATE. Practice auctions only: the practice wallet this bid belongs to.
+   * Its refund goes back to the house purse and is credited to that wallet.
+   */
+  practice?: string;
+  /** Practice auctions only: what the house purse sent to this bid's deposit address for that wallet. */
+  practice_paid?: { at: number; sent: number; txid: string };
   /** Hash of the token the bidder shows to see this bid's status. */
   token_hash: string;
   /** PRIVATE. Where this bidder's money goes back to. */
@@ -26,8 +47,12 @@ export interface Bid {
   deposit_address: string;
   /** Public key made in the bidder's browser. If this bid wins, the lot key is sealed to it. */
   delivery_pub?: string;
-  /** Set once the bidder opens the commitment, after bidding has closed. */
-  reveal?: { amount: number; nonce: string; at: number };
+  /**
+   * The opened bid, after bidding has closed. `nonce` opens the commitment
+   * (scheme 2: it is the blinding). `by` says whether the time lock opened it
+   * or the bidder's browser did, from the ticket.
+   */
+  reveal?: { amount: number; nonce: string; at: number; by?: "beacon" | "bidder" };
 }
 
 export interface PaymentRecord {
@@ -133,6 +158,8 @@ export interface Delivery {
     verdict?: DeliveryVerdict;
     /** PRIVATE. Digital "not as described": the lot key, handed over by the winner so the operator can open the lot. */
     lot_key?: string;
+    /** PRIVATE. Private auctions: the key to the listing, handed over by the winner so the operator can read what was described. */
+    listing_key?: string;
     /** The seller's answer to the complaint. */
     seller_reply?: { at: number; text: string };
   };
@@ -143,12 +170,50 @@ export interface Delivery {
   stray_returns?: { txid: string; at: number; paid: number }[];
 }
 
+/**
+ * Scheme 2. The time lock on an auction's bids: a drand network and the first
+ * of its rounds signed after bidding ends. Fixed when bidding opens.
+ */
+export interface TimeLock {
+  chain: BeaconChain;
+  round: number;
+  /** The round's signature, once it exists and has been checked. It is public. */
+  beacon?: { round: number; signature: string };
+}
+
 export interface Auction {
   id: string;
   created_at: number;
   title: string;
   description: string;
+  /**
+   * 2: same-size deposits, Pedersen commitments, time-locked bids and a
+   * published proof of the result. Absent on auctions listed before these
+   * existed: SHA-256 commitments opened by the bidders, deposits that cover
+   * the bid.
+   */
+  scheme?: 2;
   reserve: number;
+  /** Scheme 2. The highest bid allowed. Every bid deposits this plus the bond. */
+  ceiling?: number;
+  /** Scheme 2. Set when bidding opens. */
+  timelock?: TimeLock;
+  /**
+   * A practice auction, listed by the site itself (lib/house/). The seller is
+   * the site, and `bot_bids` are bids placed by its automated bidders with
+   * real deposits from the house purse. The page says so plainly.
+   */
+  house?: { n: number; bot_bids: string[]; bot_max: number };
+  /**
+   * A private auction: not listed, and shown only to browsers that hold the
+   * invite. `listing` is the title and description, encrypted in the seller's
+   * browser (the site can't open it; `title` and `description` above are then
+   * placeholders). `access_hash` is the hash of the token an invited browser
+   * shows. The invite key itself never reaches the site.
+   */
+  private?: { listing: string; access_hash: string };
+  /** Scheme 2. Set when the result and its proof have been saved (<data>/proofs/). */
+  proof?: { at: number; bytes: number };
   ends_at: number;
   /** How long bidding runs once the auction opens. */
   duration_seconds?: number;

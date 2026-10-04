@@ -1,17 +1,18 @@
 // List auctions (public view) and create one.
-import { bondFor, fromBase64, newId } from "vault-core";
-import { advance } from "@/lib/engine";
+import { bondFor, fromBase64, validSealedListing } from "vault-core";
+import { PRIVATE_TITLE } from "@/lib/access";
 import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
-import { checkAddress, createVault, newDepositAddress, SignerError } from "@/lib/signer";
-import { createAuction, listAuctions, saveLot } from "@/lib/store";
+import { createListing } from "@/lib/listing";
+import { checkAddress, SignerError } from "@/lib/signer";
+import { listAuctions } from "@/lib/store";
 import type { Delivery } from "@/lib/types";
-import { infosFor, publicView } from "@/lib/views";
+import { infosFor, listed, publicView } from "@/lib/views";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const auctions = (await listAuctions()).filter((a) => a.state !== "funding" && !a.outcome?.cancelled);
+  const auctions = listed(await listAuctions());
   const views = await Promise.all(
     auctions.map(async (a) => publicView(a, await infosFor(a))),
   );
@@ -26,8 +27,21 @@ export async function POST(req: Request) {
   const body = await readJson(req, 1_450_000);
   if (!body) return bad("invalid request, or the lot is larger than 1 MB");
 
-  const title = typeof body.title === "string" ? body.title.trim() : "";
-  const description = typeof body.description === "string" ? body.description.trim() : "";
+  // A private auction: the title and description arrive encrypted (the
+  // seller's browser did it, and the site can't open them), with the hash of
+  // the token invited browsers will show. Nothing readable is taken from the
+  // request in their place.
+  let hidden: { listing: string; access_hash: string } | null = null;
+  if (body.private !== undefined) {
+    const p = body.private as Record<string, unknown> | null;
+    if (!p || typeof p !== "object") return bad("invalid private listing");
+    if (!validSealedListing(p.listing)) return bad("the encrypted listing is not valid");
+    if (typeof p.access_hash !== "string" || !/^[0-9a-f]{64}$/.test(p.access_hash)) return bad("invalid invite");
+    if (body.title !== undefined || body.description !== undefined) return bad("a private auction sends no readable title or description");
+    hidden = { listing: p.listing, access_hash: p.access_hash };
+  }
+  const title = hidden ? PRIVATE_TITLE : typeof body.title === "string" ? body.title.trim() : "";
+  const description = hidden ? "" : typeof body.description === "string" ? body.description.trim() : "";
   const reserve = body.reserve;
   const durationSec = body.duration_seconds;
   const revealSec = body.reveal_seconds;
@@ -38,6 +52,10 @@ export async function POST(req: Request) {
   if (description.length > LIMITS.descriptionMax) return bad(`the description can have at most ${LIMITS.descriptionMax} characters`);
   if (typeof reserve !== "number" || !Number.isSafeInteger(reserve) || reserve < LIMITS.minReserve)
     return bad(`the reserve must be at least ${LIMITS.minReserve} zatoshis`);
+  // The highest bid allowed. Every bidder deposits this much (plus the bond), so deposits all look alike.
+  const ceiling = body.ceiling;
+  if (typeof ceiling !== "number" || !Number.isSafeInteger(ceiling) || typeof reserve !== "number" || ceiling < reserve || ceiling > reserve * LIMITS.maxCeilingMultiple || ceiling > LIMITS.maxAmount)
+    return bad(`the highest bid allowed must be between the reserve and ${LIMITS.maxCeilingMultiple} times the reserve`);
   if (typeof durationSec !== "number" || !Number.isInteger(durationSec) || durationSec < LIMITS.minDurationSec || durationSec > LIMITS.maxDurationSec)
     return bad(`an auction runs between ${Math.ceil(LIMITS.minDurationSec / 60)} minutes and ${LIMITS.maxDurationSec / 86400} days`);
   if (typeof revealSec !== "number" || !Number.isInteger(revealSec) || revealSec < LIMITS.minRevealSec || revealSec > LIMITS.maxRevealSec)
@@ -85,35 +103,8 @@ export async function POST(req: Request) {
   try {
     const check = await checkAddress(payout);
     if (!check.ok) return bad(`payout address: ${check.reason}`);
-    const vault = await createVault();
-    const now = Date.now();
-    const id = newId();
-    // A second vault for this auction: it holds the price between the sale and the handover.
-    let escrow: Pick<Delivery, "escrow_vault_id" | "escrow_address"> | null = null;
-    if (delivery) {
-      const held = await createVault();
-      escrow = { escrow_vault_id: held.vault_id, escrow_address: await newDepositAddress(held.vault_id) };
-    }
-    if (lot) await saveLot(id, lot);
-    await createAuction({
-      id,
-      created_at: now,
-      title,
-      description,
-      reserve,
-      ends_at: now + durationSec * 1000,
-      duration_seconds: durationSec,
-      reveal_seconds: revealSec,
-      seller: { payout_address: payout, key_hash: keyHash },
-      vault_id: vault.vault_id,
-      ...(delivery && escrow ? { delivery: { ...delivery, ...escrow } } : {}),
-      // With a bond, bidding opens when the seller's bond has arrived.
-      state: delivery && delivery.seller_bond > 0 ? "funding" : "open",
-      bids: [],
-      settlements: [],
-    });
-    const auction = await advance(id, true);
-    return ok({ auction: publicView(auction!, { info: null, escrow: null }) }, 201);
+    const auction = await createListing({ title, description, reserve, ceiling, durationSec, revealSec, payout, keyHash, delivery, lot, ...(hidden ? { private: hidden } : {}) });
+    return ok({ auction: publicView(auction, { info: null, escrow: null, site_key: null }) }, 201);
   } catch (e) {
     if (e instanceof SignerError) return bad(e.status === 503 ? e.message : "the signer could not open a vault for this auction", 503);
     return bad("could not create the auction", 500);

@@ -100,3 +100,36 @@ export async function loadLot(id: string): Promise<Uint8Array | null> {
     throw e;
   }
 }
+
+// --- results and their proofs: <data>/proofs/<auction id>.json ----------------
+//
+// Public once the auction is decided: the statement lists the board and the result, and the
+// proof shows the result is right without giving away the losing bids.
+
+const PROOFS = path.join(DATA_DIR, "proofs");
+
+/**
+ * Saves a result and its proof, and returns its size in bytes. Called once, as
+ * the auction is decided; the file is served only after the auction record
+ * says so, so a pass that was interrupted before that can safely write again.
+ */
+export async function saveProof(id: string, body: unknown): Promise<number> {
+  if (!ID.test(id)) throw new Error("bad auction id");
+  await fs.mkdir(PROOFS, { recursive: true });
+  const text = JSON.stringify(body);
+  const file = path.join(PROOFS, `${id}.json`);
+  const tmp = `${file}.${process.pid}.tmp`;
+  await fs.writeFile(tmp, text, "utf8");
+  await fs.rename(tmp, file);
+  return Buffer.byteLength(text);
+}
+
+export async function loadProof(id: string): Promise<string | null> {
+  if (!ID.test(id)) return null;
+  try {
+    return await fs.readFile(path.join(PROOFS, `${id}.json`), "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+}

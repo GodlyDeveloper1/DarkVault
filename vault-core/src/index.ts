@@ -12,6 +12,8 @@
 // Amounts are whole zatoshis (1 TAZ = 100,000,000 zat) held in ordinary
 // numbers; every amount is checked to be a safe integer.
 
+import type { BoardStatus } from "./fairness";
+
 export const ZAT_PER_COIN = 100_000_000;
 
 /** ZIP 317: every action in a transaction costs this much. */
@@ -136,7 +138,10 @@ export async function manageToken(manageKey: string): Promise<string> {
 /** A bid as the auction sees it at the end of the reveal window. */
 export interface SealedBid {
   id: string;
-  /** Position in the order deposits were confirmed. Earlier wins a tie. */
+  /**
+   * Earlier wins a tie. `decide`: the order deposits were confirmed.
+   * `decideSealed`: the order the bids were placed (the position on the board).
+   */
   order: number;
   /** Zatoshis confirmed at this bid's deposit address. 0 if nothing arrived. */
   deposit: number;
@@ -149,7 +154,8 @@ export type Standing =
   | "outbid"
   | "below-reserve"
   | "not-revealed"
-  | "underfunded" // revealed more than was deposited
+  | "underfunded" // the deposit doesn't cover the bid (or, with same-size deposits, the amount every bid must deposit)
+  | "over-ceiling" // same-size deposits: the bid was above the highest bid the auction allows
   | "no-deposit";
 
 export interface Outcome {
@@ -197,6 +203,66 @@ export function decide(reserve: number, bids: SealedBid[], bond = 0): Outcome {
   if (!winner) return { sold: false, standing };
   standing[winner.id] = "won";
   return { sold: true, winnerId: winner.id, price: winner.revealed!, standing };
+}
+
+/**
+ * The same auction with same-size deposits (scheme 2).
+ *
+ * The seller sets a ceiling: the highest bid allowed. Every bidder deposits
+ * exactly the same amount, the ceiling plus the bond, whatever they bid. So a
+ * deposit says nothing about the bid behind it, not even to the site, which
+ * sees the deposits arrive.
+ *
+ * A bid counts if its deposit is at least that amount, it was opened, and it
+ * is no higher than the ceiling. The highest counting bid at or above the
+ * reserve wins and pays exactly what it bid. Ties go to the bid placed first:
+ * `order` is the bid's position on the public board, which everyone can see,
+ * so the tie-break can be checked by anyone (see fairness.ts).
+ */
+export function decideSealed(reserve: number, ceiling: number, bids: SealedBid[], bond = 0): Outcome {
+  assertAmount(reserve, "the reserve");
+  assertAmount(ceiling, "the ceiling");
+  assertAmount(bond, "the bond");
+  if (ceiling < reserve) throw new Error("the ceiling can't be below the reserve");
+  const required = ceiling + bond;
+  const standing: Record<string, Standing> = {};
+  const counting: SealedBid[] = [];
+  for (const bid of bids) {
+    assertAmount(bid.deposit, "a deposit");
+    if (bid.deposit === 0) standing[bid.id] = "no-deposit";
+    else if (bid.deposit < required) standing[bid.id] = "underfunded";
+    else if (bid.revealed === undefined) standing[bid.id] = "not-revealed";
+    else {
+      assertAmount(bid.revealed, "an opened bid");
+      if (bid.revealed > ceiling) standing[bid.id] = "over-ceiling";
+      else if (bid.revealed < reserve) standing[bid.id] = "below-reserve";
+      else {
+        standing[bid.id] = "outbid";
+        counting.push(bid);
+      }
+    }
+  }
+  counting.sort((a, b) => b.revealed! - a.revealed! || a.order - b.order);
+  const winner = counting[0];
+  if (!winner) return { sold: false, standing };
+  standing[winner.id] = "won";
+  return { sold: true, winnerId: winner.id, price: winner.revealed!, standing };
+}
+
+/**
+ * How a bid appears on the public board once the result is in. A bid below
+ * the reserve still "counted": it was opened, and the proof covers it.
+ */
+export function boardStatusOf(standing: Standing): BoardStatus {
+  if (standing === "no-deposit" || standing === "underfunded") return standing;
+  if (standing === "not-revealed" || standing === "over-ceiling") return "unopened";
+  return "counted";
+}
+
+/** The ceiling a sell form suggests: five times the reserve. */
+export function suggestedCeiling(reserve: number): number {
+  assertAmount(reserve, "the reserve");
+  return reserve * 5;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,3 +463,27 @@ export function formatCoins(zat: number): string {
 // ---------------------------------------------------------------------------
 
 export * from "./delivery";
+
+// ---------------------------------------------------------------------------
+// 5. Hidden-amount commitments and the proof that the highest bid won
+// ---------------------------------------------------------------------------
+
+export * from "./fairness";
+
+// ---------------------------------------------------------------------------
+// 6. Time-locked bids
+// ---------------------------------------------------------------------------
+
+export * from "./timelock";
+
+// ---------------------------------------------------------------------------
+// 7. Signed receipts for placed bids
+// ---------------------------------------------------------------------------
+
+export * from "./receipt";
+
+// ---------------------------------------------------------------------------
+// 8. Private auctions: an encrypted listing and the invite that opens it
+// ---------------------------------------------------------------------------
+
+export * from "./invite";

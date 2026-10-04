@@ -80,6 +80,20 @@ export function deliveryPublic(privateKey: string): string {
   return hex(x25519.getPublicKey(unhex(privateKey, 32, "the delivery key")));
 }
 
+/**
+ * Can something be sealed to this public key? A key of low order (all zeros,
+ * say) can't: sealing to it fails. Checked when a bid is placed, so that a
+ * bidder can't win with a key the seller is unable to deliver to.
+ */
+export function validDeliveryPublic(publicKey: string): boolean {
+  try {
+    x25519.getSharedSecret(x25519.utils.randomPrivateKey(), unhex(publicKey, 32, "the delivery key"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface SellerKeys {
   /** AES-256 key the lot is encrypted with. Never sent to the site. */
   lotKey: Uint8Array;

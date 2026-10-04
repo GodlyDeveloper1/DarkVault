@@ -1,8 +1,13 @@
 // A bidder's own record of their sealed bids, kept in this browser only.
 //
-// The amount and the nonce never leave the browser until bidding has closed.
-// Lose them and the bid can't be opened: it won't count, though the deposit is
-// still returned. That is why the page offers a ticket file to save.
+// The amount and the nonce never leave the browser in a form anyone can read
+// until bidding has closed. On auctions with time-locked bids they are sent
+// locked, and open by themselves at the close; the ticket is then the bidder's
+// own record, the backup if the lock can't be opened, and what unlocks a lot
+// they win. On older auctions the ticket is the only way to reveal the bid.
+
+import { bidToken, QUICKNET, roundTimeMs, sealedFor, type BeaconChain, type Receipt } from "vault-core";
+import { rememberInvite } from "./invites";
 
 export interface Ticket {
   auction_id: string;
@@ -19,6 +24,62 @@ export interface Ticket {
    * unless the bidder chooses to hand it over to dispute a digital lot.
    */
   delivery_key?: string;
+  /**
+   * Auctions with time-locked bids: the site's signed receipt for this bid.
+   * It is the bidder's proof that the site accepted the bid and where it sits
+   * on the board.
+   */
+  receipt?: Receipt;
+  /**
+   * The time-locked bid exactly as it was sent. The receipt signs its hash, so
+   * together they show anyone what the site was given: once the lock's round
+   * is signed, this opens to the amount and nonce above.
+   */
+  sealed?: string;
+  /**
+   * 64 hex characters. What this bid's access token is made from. It is its
+   * own secret because, on auctions with a published proof, the winner's nonce
+   * is published: a token made from the nonce would let anyone who also knew
+   * the bid's id act as the winner. Older tickets have none and use the nonce.
+   */
+  token_secret?: string;
+  /** The site's receipt-signing key as it was when the bid was placed. */
+  site_key?: string;
+  /** When bidding was due to close, as shown when the bid was placed (milliseconds). */
+  closes_at?: number;
+  /** Placed with a practice wallet: the site's house purse funds the deposit and receives the refund. */
+  practice?: boolean;
+  /**
+   * 64 hex characters. A bid in a private auction: the invite key that opens
+   * the auction, so a ticket restored in another browser can find its way
+   * back in. Never sent anywhere.
+   */
+  invite?: string;
+}
+
+/** The token that shows the site this browser placed a bid. */
+export function tokenOf(ticket: Ticket): Promise<string> {
+  return bidToken(ticket.token_secret ?? ticket.nonce);
+}
+
+/**
+ * May this browser open the bid by hand yet? Decided here, by this browser's
+ * own clock and by what the ticket itself says, never by what the site says:
+ * a site that announced "bidding is closed" early must not be handed a bid.
+ *
+ * A time-locked bid may be opened once the round it was locked to has been
+ * signed (for the public network that time comes from constants in this
+ * code). Any other bid, once the closing time noted in the ticket has passed.
+ */
+export function mayOpenByHand(ticket: Ticket, testChain?: BeaconChain | null): boolean {
+  const now = Date.now();
+  const lock = ticket.sealed ? sealedFor(ticket.sealed) : null;
+  if (lock) {
+    const chain = lock.chain_hash === QUICKNET.hash ? QUICKNET : testChain && testChain.hash === lock.chain_hash ? testChain : null;
+    return !!chain && now >= roundTimeMs(chain, lock.round);
+  }
+  // Tickets from before closing times were noted have nothing to check against.
+  return ticket.closes_at === undefined || now >= ticket.closes_at;
 }
 
 const PREFIX = "dv-tickets-";
@@ -44,7 +105,14 @@ function valid(t: unknown, auctionId: string): t is Ticket {
     x.amount >= 0 &&
     /^[0-9a-f]{64}$/.test(x.nonce) &&
     typeof x.deposit_address === "string" &&
-    (x.delivery_key === undefined || /^[0-9a-f]{64}$/.test(x.delivery_key))
+    (x.delivery_key === undefined || /^[0-9a-f]{64}$/.test(x.delivery_key)) &&
+    (x.token_secret === undefined || /^[0-9a-f]{64}$/.test(x.token_secret)) &&
+    (x.site_key === undefined || /^[0-9a-f]{64}$/.test(x.site_key)) &&
+    (x.closes_at === undefined || Number.isSafeInteger(x.closes_at)) &&
+    (x.practice === undefined || typeof x.practice === "boolean") &&
+    (x.invite === undefined || /^[0-9a-f]{64}$/.test(x.invite)) &&
+    (x.sealed === undefined || (typeof x.sealed === "string" && x.sealed.length <= 2000)) &&
+    (x.receipt === undefined || (typeof x.receipt === "object" && x.receipt !== null && typeof x.receipt.signature === "string"))
   );
 }
 
@@ -60,6 +128,8 @@ export function loadTickets(auctionId: string): Ticket[] {
 export function saveTicket(ticket: Ticket): Ticket[] {
   const all = loadTickets(ticket.auction_id).filter((t) => t.bid_id !== ticket.bid_id);
   all.push(ticket);
+  // A ticket for a private auction brings its invite along (it matters when the ticket is restored from a file).
+  if (ticket.invite) rememberInvite(ticket.auction_id, ticket.invite);
   try {
     localStorage.setItem(key(ticket.auction_id), JSON.stringify(all));
   } catch {
@@ -97,7 +167,8 @@ export function backupFile(tickets: Ticket[]): string {
 
 /** Reads tickets back from a backup file or a single ticket file. Read in the browser; nothing is uploaded. */
 export function parseBackup(text: string): Ticket[] {
-  const start = text.search(/[[{]/);
+  // The JSON starts on a line of its own. (A header line may hold a title with a bracket in it.)
+  const start = text.search(/^[[{]/m);
   if (start < 0) return [];
   try {
     const raw: unknown = JSON.parse(text.slice(start));
@@ -110,7 +181,7 @@ export function parseBackup(text: string): Ticket[] {
 
 /** Reads a ticket back from a saved file. Returns null if it isn't one for this auction. */
 export function parseTicketFile(text: string, auctionId: string): Ticket | null {
-  const start = text.indexOf("{");
+  const start = text.search(/^\{/m);
   if (start < 0) return null;
   try {
     const t: unknown = JSON.parse(text.slice(start));
