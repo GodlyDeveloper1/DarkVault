@@ -11,8 +11,12 @@ import type { Auction } from "./types";
 
 /** The title stored for a private auction. The real one is in the encrypted listing. */
 export const PRIVATE_TITLE = "Private auction";
+/** And for a private deal. */
+export const DEAL_TITLE = "Private deal";
 
 export function maySee(auction: Auction, req: Request): boolean {
+  // A deal is always private. One that somehow isn't is shown to nobody.
+  if (auction.deal && !auction.private) return false;
   if (!auction.private) return true;
   return matches(req.headers.get("x-invite"), auction.private.access_hash);
 }

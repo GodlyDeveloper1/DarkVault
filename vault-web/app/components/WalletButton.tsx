@@ -7,51 +7,12 @@
 // that bid's own token, the same request the auction page makes.
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { decryptListing, formatCoins } from "vault-core";
-import { inviteFor, inviteHeaders } from "@/lib/invites";
-import { tokenOf, allTickets, backupFile, parseBackup, saveTicket, WALLET_EVENT, type Ticket } from "@/lib/tickets";
+import { formatCoins } from "vault-core";
+import { loadRows, statusOf, type Row, roomPath } from "@/lib/bidStatus";
+import { allTickets, backupFile, parseBackup, saveTicket, WALLET_EVENT, type Ticket } from "@/lib/tickets";
 import { addressProblem, loadWallet, maskAddress, OPEN_EVENT, saveWallet, type Wallet } from "@/lib/wallet";
 import { forgetPracticeWallet, makePracticeWallet, practiceWallet } from "@/lib/practiceClient";
 import type { WalletView } from "@/lib/house/practice";
-import type { BidView, PublicAuction } from "@/lib/views";
-
-interface Row {
-  ticket: Ticket;
-  auction?: PublicAuction;
-  view?: BidView;
-}
-
-function statusOf(row: Row): { text: string; cls: string } {
-  const { auction, view, ticket } = row;
-  if (!auction) return { text: "Checking…", cls: "" };
-  const funded = (view?.deposit?.total ?? 0) > 0;
-  if (auction.state === "open") {
-    if (!funded) return { text: "Waiting for your deposit", cls: "amber" };
-    const d = view!.deposit!;
-    // Same-size deposits: every bid deposits the same amount. Before: the bid plus the bond.
-    const need = auction.deposit_required ?? ticket.amount + (auction.delivery?.buyer_bond ?? 0);
-    return d.total >= need
-      ? { text: `Funded and sealed · ${Math.min(d.confirmations, d.needed)}/${d.needed} confirmations`, cls: "lime" }
-      : { text: auction.deposit_required ? "Deposit is smaller than this auction asks for" : "Deposit is smaller than the bid", cls: "red" };
-  }
-  if (auction.state === "revealing") {
-    if (view?.revealed) return { text: auction.scheme === 2 ? "Opened, waiting for the result" : "Revealed, waiting for the result", cls: "amber" };
-    return { text: auction.scheme === 2 ? "Bidding closed · the time lock is opening the bids" : "Open the auction to reveal this bid", cls: "amber" };
-  }
-  const refund = view?.payments.find((p) => p.kind !== "seller");
-  if (view?.standing === "won") {
-    const stage = view.delivery?.stage;
-    if (stage === "refunded") return { text: "Won, but not delivered · payment returned", cls: "" };
-    if (stage === "awaiting-address") return { text: view.delivery?.kind === "promise" ? "Won · tell the seller what you want" : "Won · send your shipping details", cls: "amber" };
-    if (stage === "awaiting-handover") return { text: "Won · waiting for the seller to hand over", cls: "amber" };
-    if (stage === "awaiting-confirmation") return { text: "Won · confirm you have the lot", cls: "amber" };
-    if (stage === "disputed") return { text: "Won · dispute open", cls: "amber" };
-    return { text: `Won · you pay ${formatCoins(auction.outcome?.price ?? ticket.amount)} TAZ`, cls: "lime" };
-  }
-  if (view?.standing === "no-deposit") return { text: "Did not count: no deposit", cls: "" };
-  if (refund) return { text: refund.status === "mined" ? `Refunded ${formatCoins(refund.paid)} TAZ` : "Refund on its way", cls: refund.status === "mined" ? "" : "amber" };
-  return { text: funded ? "Refund is being prepared" : "Closed", cls: funded ? "amber" : "" };
-}
 
 function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
@@ -139,41 +100,7 @@ export default function WalletButton() {
     if (phase !== "open" || tickets.length === 0) return;
     let stop = false;
     async function load() {
-      const auctions = new Map<string, PublicAuction>();
-      await Promise.all(
-        [...new Set(tickets.map((t) => t.auction_id))].map(async (id) => {
-          try {
-            const res = await fetch(`/api/auctions/${id}`, { headers: await inviteHeaders(id) });
-            if (!res.ok) return;
-            const auction = (await res.json()).auction as PublicAuction;
-            // A private auction's title is opened here, with this browser's invite.
-            const invite = auction.private ? await inviteFor(id) : null;
-            if (auction.private && invite) {
-              try {
-                auction.title = (await decryptListing(invite, auction.private.listing)).title;
-              } catch {
-                /* it keeps the name "Private auction" */
-              }
-            }
-            auctions.set(id, auction);
-          } catch {
-            /* next round */
-          }
-        }),
-      );
-      const next: Record<string, Row> = {};
-      await Promise.all(
-        tickets.map(async (ticket) => {
-          const row: Row = { ticket, auction: auctions.get(ticket.auction_id) };
-          try {
-            const res = await fetch(`/api/auctions/${ticket.auction_id}/bids/${ticket.bid_id}`, { headers: { "x-bid-token": await tokenOf(ticket) } });
-            if (res.ok) row.view = (await res.json()).bid;
-          } catch {
-            /* next round */
-          }
-          next[ticket.bid_id] = row;
-        }),
-      );
+      const next = await loadRows(tickets);
       if (!stop) setRows(next);
     }
     void load();
@@ -212,7 +139,7 @@ export default function WalletButton() {
       {phase !== "closed" && (
         <div className={`drawer-wrap ${phase}`}>
           <div className="drawer-catch" onClick={close} aria-hidden="true" />
-          <aside className="drawer" id="wallet-panel" role="dialog" aria-label="Wallet" tabIndex={-1} ref={panel}>
+          <aside className="drawer" id="wallet-panel" role="dialog" aria-label="Wallet" tabIndex={-1} ref={panel} data-lenis-prevent>
             <div className="row spread">
               <h2 style={{ margin: 0 }}>{wallet ? "Your wallet" : "Connect a wallet"}</h2>
               <button type="button" className="link" onClick={close} aria-label="Close">
@@ -361,7 +288,7 @@ export default function WalletButton() {
                   const s = statusOf(row);
                   return (
                     <li key={t.bid_id}>
-                      <Link href={`/auction/${t.auction_id}`} onClick={close}>
+                      <Link href={roomPath(row.auction, t.auction_id)} onClick={close}>
                         <span className="wb-title">{row.auction?.title ?? "Auction"}</span>
                         <span className="mono wb-amount">{formatCoins(t.amount)} TAZ</span>
                         <span className={`wb-status ${s.cls}`}>{s.text}</span>
@@ -398,7 +325,10 @@ export default function WalletButton() {
             </div>
             <p className="hint" style={{ marginTop: 18 }}>
               Tickets live in this browser only. A sealed bid can&apos;t be opened without its ticket, so keep a backup until the auction has
-              settled.
+              settled. Changing browser or device?{" "}
+              <Link href="/dashboard#move" onClick={close} id="wallet-move">
+                Move everything in one file.
+              </Link>
             </p>
           </aside>
         </div>

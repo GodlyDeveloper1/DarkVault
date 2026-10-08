@@ -68,6 +68,22 @@ export interface SettlePayment {
   pays_fee: boolean;
 }
 
+/**
+ * The network's fee rules make a note of 5,000 zatoshis or less worth less
+ * than it costs to spend. The wallet under the signer leaves such notes out of
+ * a vault's balance, and no settlement can ever move them, but the signer
+ * still lists them among a vault's deposits.
+ *
+ * So they are dropped here, where every answer about a vault comes in: for
+ * this site such a note never arrived. Otherwise anyone could send one to a
+ * deposit address and make the deposits add up to more than the vault holds,
+ * which stops that vault from ever being paid out.
+ */
+export const DUST_ZATOSHIS = 5_000;
+function withoutDust(info: VaultInfo): VaultInfo {
+  return { ...info, deposits: info.deposits.filter((d) => d.value_zatoshis > DUST_ZATOSHIS) };
+}
+
 /** One signer, reached at `url`. `name` is used in the message when it can't be reached. */
 function client(url: string, name: string) {
   // A payout is the slow call: the signer builds a shielded transaction, which can take minutes on a small machine.
@@ -102,7 +118,7 @@ function client(url: string, name: string) {
       const now = Date.now();
       const hit = cache.get(vaultId);
       if (!fresh && hit && now - hit.at < ttlMs) return hit.value;
-      const value = call<VaultInfo>(`/vaults/${vaultId}`);
+      const value = call<VaultInfo>(`/vaults/${vaultId}`).then(withoutDust);
       cache.set(vaultId, { at: now, value });
       value.catch(() => cache.delete(vaultId)); // don't cache failures
       if (cache.size > 5000) for (const [k, v] of cache) if (now - v.at > 60_000) cache.delete(k);

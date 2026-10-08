@@ -23,8 +23,8 @@ export type Placed = { error: string; status?: number } | { bid_id: string; depo
 export async function placeBid(id: string, b: NewBid): Promise<Placed> {
   const current = await loadAuction(id);
   if (!current) return { error: "not found", status: 404 };
-  if (current.state === "funding") return { error: "bidding has not opened yet: the seller's bond has not arrived" };
-  if (current.state !== "open" || Date.now() >= current.ends_at) return { error: "bidding has closed" };
+  if (current.state === "funding") return { error: current.deal ? "this deal is not open yet: the seller's bond has not arrived" : "bidding has not opened yet: the seller's bond has not arrived" };
+  if (current.state !== "open" || Date.now() >= current.ends_at) return { error: current.deal ? "this deal has already been taken, or its offer has run out" : "bidding has closed" };
   if (current.delivery && !b.deliveryPub) return { error: "this auction needs a delivery key with every bid; please reload the page" };
   if (b.deliveryPub && !validDeliveryPublic(b.deliveryPub)) return { error: "invalid delivery key" };
 
@@ -42,12 +42,14 @@ export async function placeBid(id: string, b: NewBid): Promise<Placed> {
     const check = await checkAddress(b.refund);
     if (!check.ok) return { error: `refund address: ${check.reason}` };
   } catch (e) {
-    return { error: e instanceof SignerError ? e.message : "could not check the refund address", status: 503 };
+    return { error: e instanceof SignerError && e.status === 503 ? e.message : "could not check the refund address; please try again", status: 503 };
   }
 
   try {
     const result = await withAuction(id, async (auction): Promise<Placed> => {
-      if (auction.state !== "open" || Date.now() >= auction.ends_at) return { error: "bidding has closed" };
+      if (auction.state !== "open" || Date.now() >= auction.ends_at) return { error: auction.deal ? "this deal has already been taken, or its offer has run out" : "bidding has closed" };
+      // A deal is for one buyer. A few acceptances are allowed (a second browser, a lost page), never a crowd.
+      if (auction.deal && auction.bids.length >= LIMITS.maxDealAcceptances) return { error: "this deal has been opened for payment too many times; ask the seller to make a new one" };
       if (auction.bids.length >= LIMITS.maxBidsPerAuction) return { error: "this auction has reached its limit of bids" };
       if (auction.bids.some((x) => x.commitment === b.commitment)) return { error: "this commitment has already been placed" };
       const deposit_address = await newDepositAddress(auction.vault_id);
@@ -74,6 +76,7 @@ export async function placeBid(id: string, b: NewBid): Promise<Placed> {
     });
     return result ?? { error: "not found", status: 404 };
   } catch (e) {
-    return { error: e instanceof SignerError ? e.message : "could not place the bid", status: 503 };
+    // The signer's own words can name a vault, which is nobody's business outside this server. Only "it isn't reachable" is passed on.
+    return { error: e instanceof SignerError && e.status === 503 ? e.message : "could not place the bid; please try again", status: 503 };
   }
 }

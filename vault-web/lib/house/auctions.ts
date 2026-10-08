@@ -34,7 +34,7 @@ import {
 import { placeBid } from "../bids";
 import { DATA_DIR } from "../datadir";
 import { deliveryStage, operatorResolve, sellerHandover, winnerConfirm } from "../delivery";
-import { advance, moneyByBid, requiredDeposit } from "../engine";
+import { advance, moneyByBid, minimumDeposit } from "../engine";
 import { sha256Hex } from "../http";
 import { LIMITS } from "../limits";
 import { createListing } from "../listing";
@@ -150,7 +150,7 @@ export async function startPracticeAuction(): Promise<{ id: string } | { error: 
         `The lot is a short encrypted note that only the winner can read. ${HOUSE.bots} house bidders (automated) bid against you; ` +
         `they never bid above ${formatCoins(botMax())} TAZ. The coins are real testnet coins and have no value.`,
       reserve: HOUSE.reserve,
-      ceiling: HOUSE.ceiling,
+      // No highest bid, like any listing. A practice wallet's deposit is a ready-made amount (HOUSE.ceiling), so its own bids can't be higher than that.
       durationSec: HOUSE.durationSec,
       revealSec: LIMITS.minRevealSec,
       payout: await treasuryAddress(purse),
@@ -225,7 +225,7 @@ async function attend(id: string, now: number): Promise<boolean> {
   if (auction.state === "revealing" && now > (auction.closed?.at ?? now) + 20_000) {
     const info = await vaultInfo(auction.vault_id);
     const money = moneyByBid(auction, info);
-    const due = auction.bids.filter((b) => bots.has(b.id) && !b.reveal && (money.get(b.id)?.counted ?? 0) >= (requiredDeposit(auction) ?? 0));
+    const due = auction.bids.filter((b) => bots.has(b.id) && !b.reveal && (money.get(b.id)?.counted ?? 0) >= minimumDeposit(auction));
     if (due.length && now < (auction.reveal_ends_at ?? 0)) {
       await withAuction(id, (a) => {
         if (a.state !== "revealing") return;

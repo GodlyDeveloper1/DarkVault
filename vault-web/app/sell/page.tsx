@@ -30,7 +30,6 @@ import {
   parseCoins,
   sellerKeys,
   sha256Hex,
-  suggestedCeiling,
   toBase64,
 } from "vault-core";
 import Qr from "@/app/components/Qr";
@@ -68,16 +67,12 @@ export default function Sell() {
   // The seller's bond. Empty means "the minimum"; the seller may stake more.
   const [bond, setBond] = useState("");
   const [bondPercent, setBondPercent] = useState(10);
-  // The highest bid allowed. Empty means "five times the reserve".
-  const [ceiling, setCeiling] = useState("");
-  const [maxMultiple, setMaxMultiple] = useState(100);
 
   useEffect(() => {
     fetch("/api/status")
       .then((r) => r.json())
       .then((b) => {
         if (typeof b.bond_percent === "number") setBondPercent(b.bond_percent);
-        if (typeof b.max_ceiling_multiple === "number") setMaxMultiple(b.max_ceiling_multiple);
       })
       .catch(() => {});
   }, []);
@@ -97,38 +92,26 @@ export default function Sell() {
 
   const reserveZat = parseCoins(reserve);
   const reserveProblem =
-    reserveZat === null ? "Enter an amount like 0.01" : reserveZat < MIN_BID ? `The reserve must be at least ${formatCoins(MIN_BID)} TAZ` : null;
+    reserveZat === null ? "Enter an amount like 0.01." : reserveZat < MIN_BID ? `The reserve must be at least ${formatCoins(MIN_BID)} TAZ.` : null;
   const lotProblem =
     kind !== "digital"
       ? null
       : file
         ? file.size > MAX_LOT_BYTES
-          ? "That file is larger than 1 MB"
+          ? "That file is larger than 1 MB."
           : file.size === 0
-            ? "That file is empty"
+            ? "That file is empty."
             : null
         : new TextEncoder().encode(secret).length > MAX_LOT_BYTES
-          ? "That text is larger than 1 MB"
+          ? "That text is larger than 1 MB."
           : secret.trim() === ""
-            ? "Add the text or a file the winner will receive"
+            ? "Add the text or a file the winner will receive."
             : null;
   const minBond = reserveZat !== null && !reserveProblem ? bondFor(reserveZat, bondPercent) : 0;
   const bondZat = bond.trim() === "" ? minBond : parseCoins(bond);
   const bondProblem =
-    minBond === 0 ? null : bondZat === null ? "Enter an amount like 0.001" : bondZat < minBond ? `Your bond must be at least ${formatCoins(minBond)} TAZ` : null;
-  const suggested = reserveZat !== null && !reserveProblem ? suggestedCeiling(reserveZat) : 0;
-  const ceilingZat = ceiling.trim() === "" ? suggested : parseCoins(ceiling);
-  const ceilingProblem =
-    reserveZat === null || reserveProblem
-      ? null
-      : ceilingZat === null
-        ? "Enter an amount like 0.05"
-        : ceilingZat < reserveZat
-          ? "It can't be below the reserve"
-          : ceilingZat > reserveZat * maxMultiple
-            ? `At most ${maxMultiple} times the reserve (${formatCoins(reserveZat * maxMultiple)} TAZ): every bidder has to deposit it`
-            : null;
-  const ready = title.trim().length >= 3 && !reserveProblem && !ceilingProblem && !lotProblem && !bondProblem && payout.trim().length > 20 && !busy;
+    minBond === 0 ? null : bondZat === null ? "Enter an amount like 0.001." : bondZat < minBond ? `Your bond must be at least ${formatCoins(minBond)} TAZ.` : null;
+  const ready = title.trim().length >= 3 && !reserveProblem && !lotProblem && !bondProblem && payout.trim().length > 20 && !busy;
 
   function pick(next: "digital" | "physical" | "promise") {
     setKind(next);
@@ -165,7 +148,6 @@ export default function Sell() {
         body: JSON.stringify({
           ...listing,
           reserve: reserveZat,
-          ceiling: ceilingZat,
           duration_seconds: duration,
           reveal_seconds: reveal,
           payout_address: payout.trim(),
@@ -273,7 +255,7 @@ export default function Sell() {
     <main>
       <div className="shell narrow">
         <p className="kicker">Sell something</p>
-        <h1 style={{ fontSize: "clamp(1.9rem, 4.5vw, 3rem)" }}>List a lot</h1>
+        <h1 style={{ fontSize: "clamp(1.9rem, 4.5vw, 3rem)" }}>List A Lot</h1>
         <p className="muted">
           No account. Bidders send sealed bids as shielded deposits. When it ends, every losing deposit is returned and the
           winning bid is held for you until the lot has been handed over.
@@ -398,31 +380,14 @@ export default function Sell() {
             </>
           )}
 
-          <div className="row" style={{ alignItems: "flex-start" }}>
-            <div className="grow">
-              <label htmlFor="reserve">Reserve price (TAZ)</label>
-              <input id="reserve" inputMode="decimal" value={reserve} onChange={(e) => setReserve(e.target.value)} />
-              <p className={reserveProblem ? "hint error" : "hint"}>{reserveProblem ?? "The least you'll accept. It is public."}</p>
-            </div>
-            <div className="grow">
-              <label htmlFor="ceiling">Highest bid allowed (TAZ)</label>
-              <input id="ceiling" inputMode="decimal" value={ceiling} onChange={(e) => setCeiling(e.target.value)} placeholder={suggested ? formatCoins(suggested) : ""} />
-              <p className={ceilingProblem ? "hint error" : "hint"}>
-                {ceilingProblem ??
-                  `Every bidder deposits this amount${minBond > 0 ? " plus the bond" : ""}, whatever they bid, so a deposit gives no bid away. What they don't owe comes back. Set it just above what you expect the lot to reach: the higher it is, the more every bidder has to lock up.`}
-              </p>
-              {!ceilingProblem && ceilingZat !== null && ceilingZat > 0 && (
-                <p className="hint" id="ceiling-effect">
-                  {ceiling.trim() === "" ? (
-                    <>
-                      Left empty, it is <strong>{formatCoins(ceilingZat)} TAZ</strong> (five times the reserve).{" "}
-                    </>
-                  ) : null}
-                  Each bidder will deposit <strong>{formatCoins(ceilingZat + minBond)} TAZ</strong> and get back everything above what they owe.
-                </p>
-              )}
-            </div>
-          </div>
+          <label htmlFor="reserve">Reserve price (TAZ)</label>
+          <input id="reserve" inputMode="decimal" value={reserve} onChange={(e) => setReserve(e.target.value)} />
+          <p className={reserveProblem ? "hint error" : "hint"} id="reserve-effect">
+            {reserveProblem ??
+              `The least you'll accept. It is public, and nobody can bid below it. There is no highest bid. Each bidder deposits their bid${
+                minBond > 0 ? ` plus a bond of ${formatCoins(minBond)} TAZ` : ""
+              }.`}
+          </p>
 
           <div className="row" style={{ alignItems: "flex-start" }}>
             <div className="grow">

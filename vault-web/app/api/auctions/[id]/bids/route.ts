@@ -15,13 +15,13 @@ import { loadAuction } from "@/lib/store";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const wait = limited("bid", clientKey(req), 20, 3600_000);
-  if (wait) return tooMany(wait, "bids");
-
   const { id } = await params;
   // A private auction takes bids only from browsers that hold its invite.
   const known = await loadAuction(id);
   if (!known || !maySee(known, req)) return bad("not found", 404);
+  // Counted only now: a stranger posting to made-up ids must not use up the room for real bidders.
+  const wait = limited("bid", clientKey(req), 20, 3600_000);
+  if (wait) return tooMany(wait, "bids");
   const body = await readJson(req);
   if (!body) return bad("invalid request");
   const commitment = typeof body.commitment === "string" ? body.commitment : "";

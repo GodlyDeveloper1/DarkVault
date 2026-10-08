@@ -111,6 +111,17 @@ export async function sellerKeys(manageKey: string): Promise<SellerKeys> {
   return { lotKey, privateKey, publicKey: deliveryPublic(privateKey) };
 }
 
+/**
+ * Order Flow: the key one unit of a batch sale is encrypted with. Each unit has
+ * its own, so handing one buyer their unit's key opens nobody else's unit.
+ * Derived from the manage key, like everything else the seller holds.
+ */
+export async function unitLotKey(manageKey: string, index: number): Promise<Uint8Array> {
+  unhex(manageKey, 32, "the manage key");
+  if (!Number.isInteger(index) || index < 0 || index > 9999) throw new Error("not a unit of this sale");
+  return sha256(te.encode(`dark-vault/v1/unit-lot-key:${index}:${manageKey}`));
+}
+
 /** What the site stores so that a delivered lot key can be checked: a hash that says nothing about the key. */
 export async function lotKeyHash(lotKey: Uint8Array): Promise<string> {
   if (lotKey.length !== 32) throw new Error("the lot key must be 32 bytes");

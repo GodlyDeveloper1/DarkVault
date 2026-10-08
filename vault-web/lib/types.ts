@@ -81,6 +81,15 @@ export interface OutcomeRecord {
   price?: number;
   winner_bid_id?: string;
   standing: Record<string, Standing>;
+  /**
+   * Order Flow. PRIVATE (the prices). The winning orders of a batch sale, each
+   * with what it offered and so pays, in an order drawn when the sale is
+   * decided that nobody outside can predict: the winner at place k gets unit k. (Not best first: a
+   * buyer would then learn from their unit's number how many orders beat
+   * theirs.) `price` above is the lowest of them, which is public, and
+   * `winner_bid_id` is not set.
+   */
+  winners?: { bid_id: string; price: number }[];
   /** How many bids counted (revealed, funded, at or above the reserve). */
   counted: number;
   decided_at: number;
@@ -165,7 +174,17 @@ export interface Delivery {
   };
   resolution?: { decision: "release" | "refund" | "return-bond"; reason: ResolutionReason; fault: Fault; at: number };
   /** PRIVATE txid. The second payout: everything in escrow, to the seller, the winner or both. */
-  payout?: { txid: string; fee: number; at: number; owed: number; paid: number; to_seller: { owed: number; paid: number } | null; to_winner: { owed: number; paid: number } | null };
+  payout?: {
+    txid: string;
+    fee: number;
+    at: number;
+    owed: number;
+    paid: number;
+    to_seller: { owed: number; paid: number } | null;
+    to_winner: { owed: number; paid: number } | null;
+    /** Order Flow: set on a unit's record once this payout has been seen in a block. The sale is finished when every unit's has. */
+    mined?: boolean;
+  };
   /** PRIVATE txids. A seller's bond that arrived after the auction was over, sent back. */
   stray_returns?: { txid: string; at: number; paid: number }[];
 }
@@ -187,14 +206,17 @@ export interface Auction {
   title: string;
   description: string;
   /**
-   * 2: same-size deposits, Pedersen commitments, time-locked bids and a
+   * 2: Pedersen commitments, time-locked bids and a
    * published proof of the result. Absent on auctions listed before these
    * existed: SHA-256 commitments opened by the bidders, deposits that cover
    * the bid.
    */
   scheme?: 2;
   reserve: number;
-  /** Scheme 2. The highest bid allowed. Every bid deposits this plus the bond. */
+  /**
+   * Scheme 2, optional. A highest bid allowed: when set, every bid deposits this plus the bond.
+   * Absent on auctions listed now: a bid deposits at least itself plus the bond, and there is no highest bid.
+   */
   ceiling?: number;
   /** Scheme 2. Set when bidding opens. */
   timelock?: TimeLock;
@@ -212,6 +234,55 @@ export interface Auction {
    * shows. The invite key itself never reaches the site.
    */
   private?: { listing: string; access_hash: string };
+  /**
+   * A private deal (the Settlement market), not an auction: two people who
+   * agreed a price elsewhere settle it here. There is no bidding. The buyer
+   * accepts by paying the price plus the bond; the first payment in full takes
+   * the deal, which then runs through the same escrow and handover as a sold
+   * lot. `reserve` equals the price, `ends_at` is when the offer runs out, and
+   * a deal is always private (its terms are encrypted in the seller's browser).
+   * `public_price`: the seller chose to show the price on the public ledger.
+   */
+  deal?: { price: number; public_price: boolean };
+  /**
+   * Order Flow: a batch sale. One seller offers `units` identical units; each
+   * sealed order is for one unit; the highest orders win one each and each
+   * pays what it offered. It is a scheme 2 record (commitments, time lock, a
+   * published proof), public, and every unit is digital: `lots` holds, per
+   * unit, the hash of that unit's lot key and the size of its encrypted lot
+   * (<data>/lots/<id>.u<n>.bin).
+   *
+   * `delivery` on this record carries the time limits, the buyer's bond per
+   * order and the seller's bond for the whole sale, and its escrow vault holds
+   * only that bond. When the sale is decided, each winner gets a record of
+   * their own (`unit_of`), with its own escrow vault, and the handover of each
+   * unit runs there exactly as a sold lot's does.
+   */
+  batch?: {
+    units: number;
+    lots: { key_hash: string; bytes: number }[];
+    /**
+     * PRIVATE. Set as the sale is decided: made from the site's own key and
+     * this sale's id. The ids of the sold units' records, and which winner
+     * gets which unit, come from it, so nobody outside can work either out,
+     * and deciding the same sale again gives the same answer.
+     */
+    unit_seed?: string;
+    /**
+     * PRIVATE txid. The seller's bond, shared out after the close: an equal
+     * share into the escrow of each unit that sold, the rest back to the
+     * seller. `txid` is null when the sale has no bonds.
+     */
+    bond_split?: { txid: string | null; fee: number; at: number; to_seller: { owed: number; paid: number } | null; shares: { owed: number; paid: number }[] };
+  };
+  /**
+   * Order Flow. This record is one sold unit of a batch sale, made by the
+   * site when the sale was decided. Nobody addresses it: it is reached only
+   * through the sale's own routes, and it appears in no list. `funded` is what
+   * the sale has sent to this unit's escrow: the winner's price and bond (from
+   * the first payout) and the seller's bond for this unit (from the split).
+   */
+  unit_of?: { parent: string; index: number; funded: { price?: number; bond?: number } };
   /** Scheme 2. Set when the result and its proof have been saved (<data>/proofs/). */
   proof?: { at: number; bytes: number };
   ends_at: number;

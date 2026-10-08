@@ -154,8 +154,8 @@ export type Standing =
   | "outbid"
   | "below-reserve"
   | "not-revealed"
-  | "underfunded" // the deposit doesn't cover the bid (or, with same-size deposits, the amount every bid must deposit)
-  | "over-ceiling" // same-size deposits: the bid was above the highest bid the auction allows
+  | "underfunded" // the deposit doesn't cover the bid and the bond (or, in an auction with a ceiling, the amount every bid must deposit)
+  | "over-ceiling" // an auction with a ceiling: the bid was above the highest bid it allows
   | "no-deposit";
 
 export interface Outcome {
@@ -206,40 +206,48 @@ export function decide(reserve: number, bids: SealedBid[], bond = 0): Outcome {
 }
 
 /**
- * The same auction with same-size deposits (scheme 2).
+ * The same auction with time-locked bids (scheme 2).
  *
- * The seller sets a ceiling: the highest bid allowed. Every bidder deposits
- * exactly the same amount, the ceiling plus the bond, whatever they bid. So a
- * deposit says nothing about the bid behind it, not even to the site, which
- * sees the deposits arrive.
+ * There are two deposit rules, chosen when the auction is listed.
  *
- * A bid counts if its deposit is at least that amount, it was opened, and it
- * is no higher than the ceiling. The highest counting bid at or above the
- * reserve wins and pays exactly what it bid. Ties go to the bid placed first:
- * `order` is the bid's position on the public board, which everyone can see,
- * so the tie-break can be checked by anyone (see fairness.ts).
+ * Without a ceiling (`ceiling` is null), which is what the sell form lists:
+ * a bidder deposits at least their bid plus the bond. There is no highest bid.
+ * The site sees deposits arrive, so a deposit tells it the most a bidder can
+ * have bid; a bidder who minds sends a larger, round amount (`hidingDeposit`).
+ * A bid counts if it was opened and its deposit covers it and the bond.
+ *
+ * With a ceiling (auctions listed before, and the tests that keep them
+ * working): every bidder deposits exactly the same amount, the ceiling plus
+ * the bond, whatever they bid, so a deposit says nothing about the bid. A bid
+ * counts if its deposit is at least that amount, it was opened, and it is no
+ * higher than the ceiling.
+ *
+ * Either way the highest counting bid at or above the reserve wins and pays
+ * exactly what it bid. Ties go to the bid placed first: `order` is the bid's
+ * position on the public board, which everyone can see, so the tie-break can
+ * be checked by anyone (see fairness.ts).
  */
-export function decideSealed(reserve: number, ceiling: number, bids: SealedBid[], bond = 0): Outcome {
+export function decideSealed(reserve: number, ceiling: number | null, bids: SealedBid[], bond = 0): Outcome {
   assertAmount(reserve, "the reserve");
-  assertAmount(ceiling, "the ceiling");
+  if (ceiling !== null) assertAmount(ceiling, "the ceiling");
   assertAmount(bond, "the bond");
-  if (ceiling < reserve) throw new Error("the ceiling can't be below the reserve");
-  const required = ceiling + bond;
+  if (ceiling !== null && ceiling < reserve) throw new Error("the ceiling can't be below the reserve");
   const standing: Record<string, Standing> = {};
   const counting: SealedBid[] = [];
   for (const bid of bids) {
     assertAmount(bid.deposit, "a deposit");
+    if (bid.revealed !== undefined) assertAmount(bid.revealed, "an opened bid");
     if (bid.deposit === 0) standing[bid.id] = "no-deposit";
-    else if (bid.deposit < required) standing[bid.id] = "underfunded";
+    else if (ceiling !== null && bid.deposit < ceiling + bond) standing[bid.id] = "underfunded";
+    // No ceiling: a deposit too small to cover even the lowest bid that could win.
+    else if (ceiling === null && bid.deposit < reserve + bond) standing[bid.id] = "underfunded";
     else if (bid.revealed === undefined) standing[bid.id] = "not-revealed";
+    else if (ceiling !== null && bid.revealed > ceiling) standing[bid.id] = "over-ceiling";
+    else if (ceiling === null && bid.revealed + bond > bid.deposit) standing[bid.id] = "underfunded";
+    else if (bid.revealed < reserve) standing[bid.id] = "below-reserve";
     else {
-      assertAmount(bid.revealed, "an opened bid");
-      if (bid.revealed > ceiling) standing[bid.id] = "over-ceiling";
-      else if (bid.revealed < reserve) standing[bid.id] = "below-reserve";
-      else {
-        standing[bid.id] = "outbid";
-        counting.push(bid);
-      }
+      standing[bid.id] = "outbid";
+      counting.push(bid);
     }
   }
   counting.sort((a, b) => b.revealed! - a.revealed! || a.order - b.order);
@@ -247,6 +255,50 @@ export function decideSealed(reserve: number, ceiling: number, bids: SealedBid[]
   if (!winner) return { sold: false, standing };
   standing[winner.id] = "won";
   return { sold: true, winnerId: winner.id, price: winner.revealed!, standing };
+}
+
+/**
+ * What to deposit (before the bond) to keep a bid from the site: the next
+ * round amount above the bid. The amounts are the reserve times 2, 5, 10, 20,
+ * 50, 100 and so on, so many different bids lead to the same deposit and the
+ * site learns only that the bid is no higher than it.
+ */
+export function hidingDeposit(reserve: number, bid: number): number {
+  assertAmount(reserve, "the reserve");
+  assertAmount(bid, "the bid");
+  if (reserve < 1) throw new Error("the reserve must be at least 1");
+  for (let decade = 1; decade <= Number.MAX_SAFE_INTEGER / (reserve * 10); decade *= 10) {
+    for (const step of [2, 5, 10]) {
+      const amount = reserve * step * decade;
+      if (amount > bid) return amount;
+    }
+  }
+  throw new Error("the bid is too large");
+}
+
+/**
+ * A private deal (Settlement): no bidding, one fixed price both sides agreed
+ * before they came here.
+ *
+ * The buyer accepts by paying the price plus the bond into an address made
+ * for that acceptance. `acceptances` are those payments, in the order they
+ * were confirmed. The first one that covers the price and the bond takes the
+ * deal. Any other payment (a second attempt, a short one) is returned by the
+ * settlement, less its share of the network fee, exactly as a losing bid's
+ * deposit is.
+ *
+ * It is `decide` with every acceptance offering exactly the price, so the
+ * rest of the machinery (the payout plan, the escrow, the bonds) is the
+ * auction's, unchanged.
+ */
+export function decideDeal(price: number, acceptances: { id: string; order: number; deposit: number }[], bond = 0): Outcome {
+  assertAmount(price, "the price");
+  if (price < MIN_BID) throw new Error("the price is too small");
+  return decide(
+    price,
+    acceptances.map((a) => ({ ...a, revealed: price })),
+    bond,
+  );
 }
 
 /**
@@ -335,7 +387,7 @@ export function plan(auctionId: string, sellerAddress: string, depositors: Depos
       bidId: winner.id,
       to: winner.refundAddress,
       zatoshis: winner.deposit - price - bond,
-      memo: `${tag}: you won. This is your deposit above the price${bond ? " and bond" : ""}.`,
+      memo: `${tag}: the part of your deposit above the price${bond ? " and bond" : ""}, returned.`,
     });
   }
   for (const d of depositors) {
@@ -487,3 +539,9 @@ export * from "./receipt";
 // ---------------------------------------------------------------------------
 
 export * from "./invite";
+
+// ---------------------------------------------------------------------------
+// Order Flow: a batch sale of several identical units (batch.ts)
+// ---------------------------------------------------------------------------
+
+export * from "./batch";

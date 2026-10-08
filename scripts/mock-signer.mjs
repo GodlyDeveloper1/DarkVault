@@ -47,9 +47,15 @@ function readBody(req) {
 const status = (s) => (s.mined_height <= height ? "mined" : "pending");
 const confirmations = (d) => (d.mined_height <= height ? height - d.mined_height + 1 : 0);
 
+// Like the real wallet: a note of 5,000 zatoshis or less costs more to spend
+// than it is worth. It is listed among a vault's deposits, but it is not part
+// of the balance and no settlement ever spends it.
+const DUST = 5000;
+const spendableNotes = (v) => v.deposits.filter((d) => d.mined_height <= height && !d.spent && d.value > DUST);
+
 function info(id, v) {
   const mined = v.deposits.filter((d) => d.mined_height <= height);
-  const unspent = mined.filter((d) => !d.spent);
+  const unspent = spendableNotes(v);
   const settlements = v.settlements.map((s) => ({ txid: s.txid, status: status(s), mined_height: status(s) === "mined" ? s.mined_height : null, fee_zatoshis: s.fee, payments: s.payments }));
   return {
     vault_id: id,
@@ -73,7 +79,7 @@ function settle(v, payments) {
     if (typeof p.to !== "string" || !p.to.startsWith("utest1")) return [400, `payment ${i}: please use a shielded unified address`];
     if (!Number.isSafeInteger(p.zatoshis) || p.zatoshis <= 0) return [400, `payment ${i} is for nothing`];
   }
-  const unspent = v.deposits.filter((d) => d.mined_height <= height && !d.spent);
+  const unspent = spendableNotes(v);
   const total = unspent.reduce((s, d) => s + d.value, 0);
   const asked = payments.reduce((s, p) => s + p.zatoshis, 0);
   if (asked !== total) return [400, `the payments add up to ${asked} zat but the vault holds ${total} zat; a settlement must pay out exactly what was deposited`];

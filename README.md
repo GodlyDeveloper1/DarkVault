@@ -1,10 +1,15 @@
 # Dark Vault
 
-A sealed-bid auction house on Zcash. Bids are shielded deposits: nobody watching
+Private markets on Zcash, where the price can be public and the people never are. Three
+markets on one shielded escrow: **Auctions** (one lot, sold to the highest sealed bid),
+**Order Flow** (many identical units, sold to the highest sealed orders) and **Settlement**
+(two people settle a price they have already agreed).
+
+First, the auctions. A sealed-bid auction house on Zcash. Bids are shielded deposits: nobody watching
 the chain can see who bid, how much, who won or what was paid. Bids are locked in time, so
-not even the site can open one before bidding closes; every bidder deposits the same amount,
-so a deposit gives no bid away; and each result comes with a proof, checked in the browser,
-that the highest bid won, without the losing bids being shown. The seller is paid only
+not even the site can open one before bidding closes; a bidder who wants to keep the amount
+from the site as well deposits a larger, round amount; and each result comes with a proof,
+checked in the browser, that the highest bid won, without the losing bids being shown. The seller is paid only
 after the lot has been handed over, and the site can't read the lot or the winner's address.
 
 Built solo by [@Diaguren_Labs](https://x.com/Diaguren_Labs) for the
@@ -12,14 +17,15 @@ Built solo by [@Diaguren_Labs](https://x.com/Diaguren_Labs) for the
 
 ## How an auction works
 
-1. **List.** A seller describes a lot, sets a reserve, the highest bid allowed and an end
-   time, and gives a shielded payout address. No account. Bidding opens when the seller's
-   bond has arrived.
+1. **List.** A seller describes a lot, sets a reserve and an end time, and gives a shielded
+   payout address. Nobody can bid below the reserve, and there is no highest bid. No account.
+   Bidding opens when the seller's bond has arrived.
 2. **Bid.** The bidder's browser seals the bid in a commitment and locks the amount in time:
    it is encrypted to a moment just after bidding ends. The server answers with a deposit
    address made for that one bid, and a signed receipt.
-3. **Deposit.** Every bidder sends the **same amount** to their address from a shielded
-   balance: the highest bid allowed plus a small bond, whatever they bid.
+3. **Deposit.** The bidder sends **their bid plus a small bond** to that address from a
+   shielded balance. A bidder who ticks "Hide My Bid From This Site" sends a larger, round
+   amount instead, and gets back what they don't owe.
 4. **Close and unlock.** Bidding stops, the time lock opens and the server reads the bids.
    Nobody has to come back.
 5. **Settle.** The highest bid wins and pays **exactly what it bid**. The site publishes a
@@ -31,13 +37,63 @@ Built solo by [@Diaguren_Labs](https://x.com/Diaguren_Labs) for the
    dispute goes against the seller, that transaction returns the price to the winner with the
    seller's bond.
 
+## How a batch sale works (the Order Flow market)
+
+For a seller with several identical units to sell at once: licence keys, invite codes, tickets.
+
+1. **Start a sale.** The seller writes what they are selling and the units, one per line (2 to
+   20). Each unit is encrypted in the seller's browser with a key of its own. They set the
+   lowest price for one unit and fund one bond per unit, in one payment. No account.
+2. **Order.** A buyer's browser seals an order for **one unit** in a commitment and locks the
+   amount in time, exactly as a bid is. The server answers with a deposit address made for
+   that one order, and a signed receipt. Two units take two orders.
+3. **Deposit.** The buyer sends **their order plus a small bond**, shielded, or a larger round
+   amount if they ticked "Hide My Order From This Site".
+4. **Close and unlock.** The time lock opens and the server reads the orders.
+5. **Settle.** The highest orders at or above the lowest price win a unit each; of two equal
+   orders, the one placed first. **Each winner pays exactly what they offered.** The site
+   publishes how many units sold and the **lowest order that won**, with a proof that the
+   right orders won, which every visitor's browser checks. One shielded transaction returns
+   every other deposit and moves each winner's price into an escrow vault made for that unit.
+6. **Hand over, unit by unit.** The seller's bond is shared out between the units that sold,
+   and the seller's browser sends each buyer the key to their unit (which buyer gets which
+   unit is a draw nobody outside can predict). Each unit is confirmed, disputed or timed out by itself, and its
+   escrow pays out by itself: one buyer's dispute holds up nobody else's unit. The seller's bond for the units that did
+   not sell comes straight back.
+
+Why not one price for every winner? A uniform price is set by someone else's order, so an
+order placed to move it (by the seller, say) changes what real buyers pay. Here, as in the
+auctions, what a buyer pays is the number they sealed, and nothing anyone else does moves it.
+
+## How a deal settles (the Settlement market)
+
+For two people who have already agreed a price, anywhere. There is no bidding.
+
+1. **Write it down.** The seller writes what the deal is for, the terms and the price, says
+   what is handed over (a file or code, a parcel, or work they will do) and gives a shielded
+   payout address. The terms are encrypted in the seller's browser. No account.
+2. **Bond and link.** The seller funds a bond. The deal then opens for payment, and the seller
+   sends the buyer one private link. The key to the terms is in the part after the `#`, which
+   browsers never send to a server.
+3. **Accept and pay.** The buyer's browser opens the terms. If they are right, the buyer
+   accepts and is given a payment address made for them alone. They send **the price plus a
+   bond**, shielded. The first payment in full takes the deal, at once.
+4. **Escrow.** One shielded transaction moves the price and the buyer's bond into the deal's
+   escrow vault, and returns anything else that was sent.
+5. **Hand over and release.** The handover is the auction's: a key, an address or a request
+   passes between the two browsers in sealed envelopes. When the buyer confirms, or their time
+   to complain runs out, a second shielded transaction pays the seller and returns both bonds.
+   If the seller doesn't hand over, the buyer gets the price back with the seller's bond.
+
+If nobody pays while the offer stands, the deal closes and the seller's bond goes back.
+
 ## What exists so far
 
 | Part | What it does | State |
 |---|---|---|
 | `signer/` | Rust service on librustzcash, the only part that holds keys. One Zcash account per auction (a "vault"), one never-reused deposit address per bid, and settlement in a single shielded transaction. | Proven on testnet (below) |
-| `vault-core/` | TypeScript rules shared by the browser and the server: bid commitments, time-locked bids, the decision (highest sealed bid wins and pays its bid), the proof of the result, signed receipts, the settlement plan, sealed delivery, and private (invite-only) listings. 70 tests. | Done for the core |
-| `vault-web/` | Next.js app: list a lot, place a sealed bid, deposit, unlock, result and its proof, delivery. The server runs the auction: it closes bidding, opens the time-locked bids, decides the winner, proves the result and asks the signer to settle. | Core flow works; design pass to come |
+| `vault-core/` | TypeScript rules shared by the browser and the server: bid commitments, time-locked bids, the decision (highest sealed bid wins and pays its bid), the proof of the result, signed receipts, the settlement plan, sealed delivery, private (invite-only) listings, the rule for a fixed-price deal, and a batch sale's decision, payout plan and proof. 102 tests. | Done for the core |
+| `vault-web/` | Next.js app. Auctions: list a lot, place a sealed bid, deposit, unlock, result and its proof, delivery. Order Flow: start a sale of several units, place a sealed order, the result and its proof, a handover per unit. Settlement: create a deal, accept and pay, escrow, handover. A public ledger of all three. The server runs the auction: it closes bidding, opens the time-locked bids, decides the winner, proves the result and asks the signer to settle. | Core flow works; design pass to come |
 | `scripts/` | A testnet proof of the signer, stand-ins for the signer and the time lock for development, the operator's dispute tool, the house purse's tools, and a small wallet helper. | |
 
 ### What nobody can see, and when
@@ -57,13 +113,20 @@ opens the bids. Bidders don't have to come back and reveal, so nobody can back o
 after the close. If no relay can be reached, each bidder's browser opens its own bid from
 its ticket within a backup window, as a plain commit-and-reveal auction would.
 
-**Same-size deposits.** Deposits are shielded, so the chain shows nothing. But the site sees
-each deposit arrive, and under a "deposit at least your bid" rule a deposit would tell the
-site the most a bidder can have bid, while bidding is still open. So the seller sets the
-highest bid allowed, and **every** bidder deposits that amount plus the bond. What a bidder
-doesn't owe comes back in the settlement transaction. The cost is that bidders lock more than
-they bid until the close; the seller chooses how much with the ceiling (at most 100 times the
-reserve).
+**Deposits, and hiding a bid from the site.** Deposits are shielded, so the chain shows
+nothing. The rule is the one any auction has: a bid can't be below the reserve, and a bidder
+deposits their bid plus the bond. There is no highest bid. But the site sees each deposit
+arrive, so a deposit tells the site the most that bidder can have bid, while bidding is still
+open. A bidder who minds ticks one box on the bid form and deposits the next round amount
+above the bid instead (the reserve times 2, 5, 10, 20, 50, 100 and so on, plus the bond).
+Many different bids lead to the same deposit, so the site learns only an upper bound. What a
+bidder doesn't owe comes back in the settlement transaction. A bid counts if its deposit
+covers the bid and the bond.
+
+Earlier versions made every bidder deposit the same amount, set by the seller as a highest
+bid allowed, so that no deposit said anything. That hid more, at the price of a cap on bids
+and of every bidder locking that cap. The rule above replaced it. Auctions listed under the
+old rule still settle by it, and the API still accepts a `ceiling` for one.
 
 **A proof that the highest bid won.** A sealed bid is a Pedersen commitment on ristretto255:
 `C = amount·G + blinding·H`. When the auction is decided the site publishes the result with
@@ -97,13 +160,16 @@ and the locked bid: once the round is signed, anyone can open it and see it was 
 |---|---|---|
 | Anyone watching the chain | Nothing: all payments are shielded | Nothing |
 | Other bidders, visitors | Commitments only | The price, which bids counted, and the proof. No losing amounts |
-| The site | Commitments, ciphertexts it can't open, deposits that are all the same size, refund addresses | The amounts of the bids that were funded in full |
+| The site | Commitments, ciphertexts it can't open, refund addresses, and the size of each deposit: the most that bidder can have bid (a round amount, if the bidder chose to hide the bid) | The amounts of the bids that were funded in full |
 | The seller | What visitors see | What visitors see, plus their own payment |
 
 What this does not do, said plainly:
 
 - After the close the site does learn the funded bids' amounts. It has to, to decide. They
   are never shown to anyone else.
+- While bidding is open the site sees the size of every deposit. A deposit of exactly the bid
+  plus the bond tells the site that bid. Only a bidder who deposits a larger, round amount
+  keeps it to an upper bound.
 - The proof covers the bids that counted. A bid the site says had no deposit, too small a
   deposit, or could not be opened is outside it, because deposits are shielded and can't be
   shown to the public. The bidder concerned can tell, and holds the receipt to say so.
@@ -116,6 +182,18 @@ What this does not do, said plainly:
   the auction is decided.
 - A site could still place a bid of its own. In a first-price auction that can't raise what
   the winner pays; it could only win the lot.
+- A shielded transaction hides who paid, whom and how much. That a transaction happened, when,
+  and roughly how many payments it carries (through its fee) is public, as for every Zcash
+  transaction. Someone who watches the site and the chain together can guess which
+  transaction settled which auction. They learn no amount and no address from it.
+- A payment of 0.00005 TAZ (5,000 zatoshis) or less is ignored. The network's fee rules make
+  such a note cost more to spend than it is worth, so the wallet can never move it; the site
+  treats it as if it had not arrived, so that nobody can jam a payout by sending one.
+- A payout waits until every deposit in its vault is confirmed. Someone who keeps sending
+  payments to their own deposit address around the close can delay it, at the cost of a
+  network fee each time. They can't take or redirect anyone's money. A vault holding more
+  than about 128 separate payments above what it pays out can't be settled by the signer as
+  it stands: a known limit.
 
 Auctions listed before this (SHA-256 commitments, a reveal by each bidder, a deposit that
 covers the bid) keep working as they did.
@@ -133,6 +211,13 @@ the browser; `vault-core/src/delivery.ts`).
 | Check | The winner's browser opens the key, checks it against the hash and decrypts the lot. The winner looks at it and says whether it is what was described. | The winner confirms when it arrives. |
 | Payout | Confirmed, or no complaint within the time limit: the seller is paid. Not handed over in time: the winner is refunded. | The same. |
 | Wrong key | The winner hands over the bid's delivery key; the site repeats the check and refunds the winner if the key doesn't open the lot. No judgement call. | |
+
+The site carries the public keys as well as the envelopes: the seller's browser seals to the
+key the site says is the winner's. A site that ran different code and swapped that key for
+one of its own could open what was sealed to it. The site as written never does, and the
+winner would see at once that their own key opens nothing; but it is the site's honesty,
+not mathematics, that this rests on. (Putting each bid's delivery key on the public board,
+under the signed receipt, would let both sides check it. Not built yet.)
 | Not as described | The winner hands over the key to that one lot. The price stays held; the operator opens exactly what was delivered, reads both sides and decides (`scripts/operator.ps1`). | The price stays held; the operator reads both sides and decides. |
 
 A third kind of lot is **a promise**: something the seller will do for the winner, such as
@@ -293,6 +378,126 @@ powershell -ExecutionPolicy Bypass -File scripts\house.ps1 status
 (put the address the first line prints in place of `ADDRESS`). After a few confirmations
 `status` shows deposits ready, and the home page offers a practice auction.
 
+### Settlement: private deals at a fixed price
+
+A deal is the same record as an auction with a fixed price and no bidding, so it runs on the
+same vaults, the same payout plan, the same sealed handover, the same bonds and the same
+disputes. What is new is small: `decideDeal` in `vault-core` (the first payment that covers
+the price and the bond takes the deal) and one step in the engine that closes a deal as soon
+as that payment is in a block, instead of waiting for an end time. There is nothing to seal
+and nothing to prove, because the price was fixed before either party arrived.
+
+| Who | What they can see of a deal |
+|---|---|
+| Anyone watching the chain | Nothing. Every payment is shielded. |
+| The public | Nothing. Or, if the seller ticked "Show The Price On The Public Ledger" and the deal completed, the price alone, added to the ledger with that day's other deals. Never which deal, the terms, the moment or the parties. |
+| The site | The price, the bonds and the time limits (it runs the escrow), the two addresses it pays, and the payment arriving. Not the terms, not a digital item, not a postal address. |
+| The other party | The terms and what is handed over. |
+
+A deal is always private. It is reached only by its link, the server sends nothing about it
+with the page, and every API route answers a browser without the link as it would for a deal
+that doesn't exist. A locked page says the same thing for a private auction and a deal, at
+either address, so even someone who has an id can't tell which it is. As with a private auction, a buyer who opens a dispute hands the operator the key to
+the terms (to that text and nothing else), so the dispute can be judged.
+
+**The ledger can't be watched to time a deal.** A deal that shows its price joins the ledger
+only when it has completed and its payout is in a block, and then only when the day's batch
+closes (midnight UTC; `VAULT_LEDGER_BATCH_SEC` shortens it for tests and demos). Rows carry
+the price and nothing else, largest first, so two deals of one price are the same row twice.
+Whether a deal may be shown is decided from its record alone, before the signer is asked
+anything, so the page does the same work however many hidden deals exist.
+
+**Honest limits.**
+
+- The site knows a deal's price: it could not hold it otherwise. It also sees the two
+  addresses it pays. It could link a seller's deals if they reuse one payout address; the
+  form asks for a fresh one.
+- A price on the ledger is what two parties chose to settle at. A seller can settle a deal
+  with themselves (it costs them the network fees), so the ledger is a record, not an oracle.
+- The site can't read a deal's terms or a digital item, with one exception that is the
+  buyer's choice: to open a dispute, their browser hands the operator the key to the terms
+  (and, for a digital item, the key to that item), so the dispute can be judged.
+- A deal is taken by the first payment in full that has the signer's confirmations. A payment
+  that lands in the short grace period after the offer's end still takes it.
+
+### Order Flow: a sealed batch sale, pay what you offered
+
+A batch sale is the same record as an auction with one more field (`batch`: how many units,
+and the hash of each unit's key), so ordering runs on the auction's code unchanged:
+commitments, the time lock, signed receipts, deposit addresses, the hide switch.
+
+What is new, in `vault-core/src/batch.ts`:
+
+- **The decision** (`decideBatch`): the highest orders that count win one unit each, and each
+  pays its own amount. Equal orders: the earlier one on the public board.
+- **The money** (`planBatch`, `planBondSplit`): one transaction pays each winner's price and
+  bond into that unit's escrow and returns everything else; a second shares the seller's
+  bond between the units that sold and returns the rest. Both add up to the last zatoshi.
+- **The proof** (`proveBatch`, `verifyBatch`): the lowest winning order's commitment is opened,
+  so anyone can check it holds the published price. Every other winner is proven to have
+  offered at least that (a 40-bit range proof on the difference), and every other counted
+  order no more, sharpened by position so a tie can't be turned around. If units were left
+  over, every other counted order is proven to be below the lowest price. No amount but
+  the published one is shown. No setup ceremony: the same range proofs as the auctions'.
+
+On the server each sold unit becomes a record of its own, made by the site at the close, with
+its own escrow vault, so the handover, the time limits, the disputes and the payout of one
+unit are the auction's code too. Those records can't be asked for by id (every route answers
+as if they did not exist), appear in no list, and their ids are made from a secret that
+never leaves the server. Buyers and the seller reach a unit only through the sale's own
+address, with their own token or key.
+
+Which winner gets which unit is a draw nobody outside can predict, made when the sale is
+decided. Handing the units out best order first would tell each buyer, by the number of their
+unit, how many orders were above their own. The draw comes from the site's own key and the
+sale's id, so a server that restarts in the middle of a close arrives at the same units and
+the same escrows again; and a sale's result is saved before any of its money moves.
+
+| Who | What they can see of a batch sale |
+|---|---|
+| Anyone watching the chain | Nothing. Every payment is shielded. |
+| The public | The board of commitments, how many units sold, which commitments won, and the lowest winning order. Not what any other order offered, and not who placed any of them. |
+| The site | No order until the close (they are locked in time). After it, every order that counted. It sees deposits arrive, so an exact deposit tells it the order early: the hide switch sends a round amount instead. |
+| The seller | What each sold unit went for, and each buyer's delivery public key. |
+| Another buyer | What the public sees, and nothing more: the units are handed out in an order nobody outside can predict, so a unit's number says nothing. One unit's key opens no other unit. |
+
+**Honest limits.**
+
+- The winners' prices other than the lowest are proven only to be at least the published
+  price. The site and the seller know them; the public does not, by design.
+- As in the auctions, the proof covers the orders that counted. An order the site says was
+  unfunded or short can't be proven either way, because deposits are shielded; the buyer's
+  own page tells them, and their ticket and signed receipt are their evidence.
+- One order can be at most 10,000 TAZ: that is the size of the number the proof speaks about.
+- The proof also says, of every counted order, on which side of the published price it fell
+  (at least it, or no more than it). That follows from the result itself.
+- Units are digital, 2 to 20 per sale, and a sale is public. Sharing out the seller's bond
+  takes one more transaction, whose network fee comes out of the bond. Every unit's handover
+  waits for that one transaction; after it, one buyer's dispute holds up nobody else's unit.
+- At this site's usual bond (10%), the lowest price can be at most 100 TAZ, as for a reserve.
+- A unit a buyer never opens is paid to the seller when the buyer's time to complain runs
+  out, as with any digital lot.
+
+### The ledger
+
+`/ledger` is the public record of the three markets: how every listed auction ended (price,
+payout, handover, a link to check the proof), how many units every batch sale sold and the
+lowest order that won, and every finished deal whose seller chose to show its price. It is
+built only from what was already public.
+
+### Moving to another browser
+
+There are no accounts, so a visitor's bids, payment tickets, seller keys and invites live in
+their browser. The dashboard's "Move To Another Browser" saves all of it to one file and reads
+such a file back. With a passphrase the file is encrypted in the browser (AES-256-GCM, key
+from PBKDF2-SHA-256, 600,000 rounds). Nothing is uploaded, and restoring only adds: it never
+replaces what a browser already holds.
+
+A file can come from anyone, so nothing in one is trusted. A ticket's payment address is
+never shown: the page shows the address the site made for that bid or payment, and warns if
+the site has none. A seller key, from a file or from a link, is used only once the site
+confirms it is that record's key, and never replaces one already held.
+
 ### Connect wallet, without handing over an address
 
 On other chains, connecting a wallet gives the site a permanent address. Here that would be the
@@ -327,7 +532,7 @@ npm install
 npm test
 ```
 
-The proof and time-lock tests take about fifteen seconds.
+The proof and time-lock tests take about half a minute.
 
 ## Run the web app
 
@@ -422,11 +627,12 @@ bonds.
 | `VAULT_CLOSE_GRACE_SEC` | `40` | Wait after the end time before closing, so the signer has scanned the last blocks |
 | `VAULT_BOND_PERCENT` | `10` | Bonds, as a percentage of the reserve (never less than 0.0005 TAZ). `0` switches bonds off |
 | `VAULT_BOND_WAIT_SEC` | `7200` | How long a new listing waits for the seller's bond before it is cancelled |
+| `VAULT_LEDGER_BATCH_SEC` | `86400` | How often completed deals that show their price are added to the public ledger (batches close on a fixed clock, so a deal can't be timed). Shorter only for tests and demos |
 | `VAULT_MIN_DELIVERY_SEC` | `3600` | Shortest handover and complaint time limits a seller can set |
 | `VAULT_OPERATOR_KEY` | unset | Turns on the operator's routes: disputes and the house purse. 24 characters or more. Keep it secret |
 | `HOUSE_SIGNER_URL` | unset | The house signer, for practice auctions and practice wallets. Unset: the site has neither |
 | `VAULT_PRACTICE_DURATION_SEC` | `480` | How long a practice auction takes bids |
-| `VAULT_PRACTICE_RESERVE` / `VAULT_PRACTICE_CEILING` | `100000` / twice the reserve | A practice auction's reserve and highest bid allowed, in zatoshis |
+| `VAULT_PRACTICE_RESERVE` / `VAULT_PRACTICE_CEILING` | `100000` / twice the reserve | A practice auction's reserve, and the most a practice wallet or a house bidder can bid (their deposits are ready-made amounts of that size), in zatoshis |
 | `VAULT_PRACTICE_SLOTS` | `4` | Ready-made deposits the purse keeps for visitors, besides the house bidders' two |
 | `VAULT_PRACTICE_SETTLE_WAIT_SEC` | `300` | Wait after the last practice auction before the purse makes new deposits |
 | `VAULT_PRACTICE_PAY_CUTOFF_SEC` | `100` | A practice wallet pays a deposit only while this much bidding time is left, so the deposit can reach a block |

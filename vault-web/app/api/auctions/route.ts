@@ -1,18 +1,23 @@
-// List auctions (public view) and create one.
-import { bondFor, fromBase64, validSealedListing } from "vault-core";
-import { PRIVATE_TITLE } from "@/lib/access";
+// List auctions (public view) and create one. A private deal (the Settlement
+// market) is created here too: it is the same record with a fixed price and
+// no bidding. So is a batch sale (the Order Flow market): the same record
+// with several units, each with an encrypted lot of its own.
+import { BATCH_MAX_ORDER, BATCH_MAX_UNITS, BATCH_MIN_UNITS, MIN_BOND, bondFor, fromBase64, validSealedListing } from "vault-core";
+import { DEAL_TITLE, PRIVATE_TITLE } from "@/lib/access";
 import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
 import { createListing } from "@/lib/listing";
 import { checkAddress, SignerError } from "@/lib/signer";
 import { listAuctions } from "@/lib/store";
 import type { Delivery } from "@/lib/types";
-import { infosFor, listed, publicView } from "@/lib/views";
+import { infosFor, listed, listedSales, publicView } from "@/lib/views";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const auctions = listed(await listAuctions());
+export async function GET(req: Request) {
+  // ?market=orders lists the batch sales (Order Flow) in place of the auctions.
+  const all = await listAuctions();
+  const auctions = new URL(req.url).searchParams.get("market") === "orders" ? listedSales(all) : listed(all);
   const views = await Promise.all(
     auctions.map(async (a) => publicView(a, await infosFor(a))),
   );
@@ -40,23 +45,69 @@ export async function POST(req: Request) {
     if (body.title !== undefined || body.description !== undefined) return bad("a private auction sends no readable title or description");
     hidden = { listing: p.listing, access_hash: p.access_hash };
   }
-  const title = hidden ? PRIVATE_TITLE : typeof body.title === "string" ? body.title.trim() : "";
+  // A deal: two people settling a price they already agreed. Always private, always with a handover.
+  let deal: { public_price: boolean } | null = null;
+  if (body.deal !== undefined) {
+    const d = body.deal as Record<string, unknown> | null;
+    if (!d || typeof d !== "object") return bad("invalid deal");
+    if (!hidden) return bad("a deal's terms are sent encrypted");
+    if (body.delivery === undefined) return bad("a deal needs a handover: digital, physical or a promise");
+    if (body.ceiling !== undefined && body.ceiling !== null) return bad("a deal has one price");
+    deal = { public_price: d.public_price === true };
+  }
+  // A batch sale: several identical units, one sealed order per unit. Public, and every unit is digital.
+  let batch: { lots: { key_hash: string; bytes: Uint8Array }[] } | null = null;
+  if (body.batch !== undefined) {
+    const b = body.batch as Record<string, unknown> | null;
+    if (!b || typeof b !== "object" || !Array.isArray(b.lots)) return bad("invalid batch sale");
+    if (hidden || deal) return bad("a batch sale is public");
+    if (body.ceiling !== undefined && body.ceiling !== null) return bad("a batch sale has no highest order");
+    if (b.lots.length < BATCH_MIN_UNITS || b.lots.length > BATCH_MAX_UNITS) return bad(`a batch sale offers ${BATCH_MIN_UNITS} to ${BATCH_MAX_UNITS} units`);
+    const lots: { key_hash: string; bytes: Uint8Array }[] = [];
+    let total = 0;
+    for (const raw of b.lots as unknown[]) {
+      const u = raw as Record<string, unknown> | null;
+      if (!u || typeof u !== "object" || typeof u.key_hash !== "string" || !/^[0-9a-f]{64}$/.test(u.key_hash)) return bad("invalid unit key hash");
+      let bytes: Uint8Array;
+      try {
+        bytes = fromBase64(typeof u.lot === "string" ? u.lot : "!");
+      } catch {
+        return bad("an encrypted unit is not valid");
+      }
+      // 12 bytes of nonce, a 4-byte header length, at least one byte of content, a 16-byte tag.
+      if (bytes.length < 33 || bytes.length > LIMITS.maxUnitLotBytes) return bad(`an encrypted unit is empty or larger than ${Math.floor(LIMITS.maxUnitLotBytes / 1024)} KB`);
+      total += bytes.length;
+      lots.push({ key_hash: u.key_hash, bytes });
+    }
+    if (total > LIMITS.maxLotBytes) return bad("the units together are larger than 1 MB");
+    // Every unit has a key of its own: the same key twice would let one buyer open another's unit.
+    if (new Set(lots.map((l) => l.key_hash)).size !== lots.length) return bad("two units have the same key");
+    batch = { lots };
+  }
+  const units = batch?.lots.length ?? 1;
+  const title = hidden ? (deal ? DEAL_TITLE : PRIVATE_TITLE) : typeof body.title === "string" ? body.title.trim() : "";
   const description = hidden ? "" : typeof body.description === "string" ? body.description.trim() : "";
   const reserve = body.reserve;
   const durationSec = body.duration_seconds;
-  const revealSec = body.reveal_seconds;
+  // A deal has nothing to reveal.
+  const revealSec = deal ? LIMITS.minRevealSec : body.reveal_seconds;
   const payout = typeof body.payout_address === "string" ? body.payout_address.trim() : "";
   const keyHash = typeof body.manage_key_hash === "string" ? body.manage_key_hash : "";
 
   if (title.length < 3 || title.length > LIMITS.titleMax) return bad(`the title needs 3 to ${LIMITS.titleMax} characters`);
   if (description.length > LIMITS.descriptionMax) return bad(`the description can have at most ${LIMITS.descriptionMax} characters`);
   if (typeof reserve !== "number" || !Number.isSafeInteger(reserve) || reserve < LIMITS.minReserve)
-    return bad(`the reserve must be at least ${LIMITS.minReserve} zatoshis`);
-  // The highest bid allowed. Every bidder deposits this much (plus the bond), so deposits all look alike.
-  const ceiling = body.ceiling;
-  if (typeof ceiling !== "number" || !Number.isSafeInteger(ceiling) || typeof reserve !== "number" || ceiling < reserve || ceiling > reserve * LIMITS.maxCeilingMultiple || ceiling > LIMITS.maxAmount)
+    return bad(`the ${deal ? "price" : "reserve"} must be at least ${LIMITS.minReserve} zatoshis`);
+  // A listing normally has no highest bid: a bidder deposits their bid plus the bond.
+  // One sent with a ceiling is an auction with same-size deposits: every bidder deposits the ceiling plus the bond.
+  const ceiling: number | undefined = body.ceiling === undefined || body.ceiling === null ? undefined : (body.ceiling as number);
+  if (ceiling !== undefined && (typeof ceiling !== "number" || !Number.isSafeInteger(ceiling) || ceiling < reserve || ceiling > reserve * LIMITS.maxCeilingMultiple || ceiling > LIMITS.maxAmount))
     return bad(`the highest bid allowed must be between the reserve and ${LIMITS.maxCeilingMultiple} times the reserve`);
-  if (typeof durationSec !== "number" || !Number.isInteger(durationSec) || durationSec < LIMITS.minDurationSec || durationSec > LIMITS.maxDurationSec)
+  if (reserve > LIMITS.maxAmount) return bad(`the ${deal ? "price" : "reserve"} is too high`);
+  if (batch && reserve > BATCH_MAX_ORDER) return bad("the lowest price is too high");
+  if (deal && (typeof durationSec !== "number" || !Number.isInteger(durationSec) || durationSec < LIMITS.minDurationSec || durationSec > LIMITS.maxDealOfferSec))
+    return bad(`a deal's offer stands between ${Math.ceil(LIMITS.minDurationSec / 60)} minutes and ${LIMITS.maxDealOfferSec / 86400} days`);
+  if (!deal && (typeof durationSec !== "number" || !Number.isInteger(durationSec) || durationSec < LIMITS.minDurationSec || durationSec > LIMITS.maxDurationSec))
     return bad(`an auction runs between ${Math.ceil(LIMITS.minDurationSec / 60)} minutes and ${LIMITS.maxDurationSec / 86400} days`);
   if (typeof revealSec !== "number" || !Number.isInteger(revealSec) || revealSec < LIMITS.minRevealSec || revealSec > LIMITS.maxRevealSec)
     return bad(`the reveal window is between ${Math.ceil(LIMITS.minRevealSec / 60)} minutes and 24 hours`);
@@ -76,9 +127,15 @@ export async function POST(req: Request) {
       return bad(`delivery time limits are between ${Math.ceil(LIMITS.minDeliverySec / 60)} minutes and ${LIMITS.maxDeliverySec / 86400} days`);
     // Bonds. The buyer's is fixed by the reserve; the seller may stake more than the minimum, never less.
     const minBond = typeof reserve === "number" ? bondFor(reserve, LIMITS.bondPercent) : 0;
-    const sellerBond = d.seller_bond === undefined ? minBond : d.seller_bond;
-    if (typeof sellerBond !== "number" || !Number.isSafeInteger(sellerBond) || sellerBond < minBond || sellerBond > LIMITS.maxSellerBond)
-      return bad(`the seller's bond must be at least ${minBond} zatoshis`);
+    // A batch sale's seller puts down one bond per unit, all at once.
+    const sellerBond = d.seller_bond === undefined ? minBond * units : d.seller_bond;
+    if (minBond > LIMITS.maxSellerBond) return bad(`the ${deal ? "price" : batch ? "lowest price" : "reserve"} is higher than this site takes: its bond would be more than ${LIMITS.maxSellerBond} zatoshis`);
+    if (typeof sellerBond !== "number" || !Number.isSafeInteger(sellerBond) || sellerBond < minBond * units)
+      return bad(`the seller's bond must be at least ${minBond * units} zatoshis`);
+    if (sellerBond > LIMITS.maxSellerBond * units) return bad(`the seller's bond can be at most ${LIMITS.maxSellerBond * units} zatoshis`);
+    // A bond is either nothing or enough to be moved: a smaller one could never be paid back, or shared between units.
+    if (sellerBond !== 0 && sellerBond < MIN_BOND * units) return bad(`a seller's bond, if there is one, must be at least ${MIN_BOND * units} zatoshis`);
+    if (batch && (d.kind !== "digital" || d.key_hash !== undefined || d.lot !== undefined)) return bad("every unit of a batch sale is digital, with a key of its own");
     delivery = {
       kind: d.kind,
       seller_pub: d.seller_pub,
@@ -87,7 +144,7 @@ export async function POST(req: Request) {
       seller_bond: sellerBond,
       buyer_bond: minBond,
     };
-    if (d.kind === "digital") {
+    if (d.kind === "digital" && !batch) {
       if (typeof d.key_hash !== "string" || !/^[0-9a-f]{64}$/.test(d.key_hash)) return bad("invalid lot key hash");
       try {
         lot = fromBase64(typeof d.lot === "string" ? d.lot : "!");
@@ -100,10 +157,26 @@ export async function POST(req: Request) {
     }
   }
 
+  if (batch && !delivery) return bad("a batch sale needs its handover time limits");
+
   try {
     const check = await checkAddress(payout);
     if (!check.ok) return bad(`payout address: ${check.reason}`);
-    const auction = await createListing({ title, description, reserve, ceiling, durationSec, revealSec, payout, keyHash, delivery, lot, ...(hidden ? { private: hidden } : {}) });
+    const auction = await createListing({
+      title,
+      description,
+      reserve,
+      ceiling,
+      durationSec: durationSec as number,
+      revealSec: revealSec as number,
+      payout,
+      keyHash,
+      delivery,
+      lot,
+      ...(hidden ? { private: hidden } : {}),
+      ...(deal ? { deal: { price: reserve, public_price: deal.public_price } } : {}),
+      ...(batch ? { unitLots: batch.lots } : {}),
+    });
     return ok({ auction: publicView(auction, { info: null, escrow: null, site_key: null }) }, 201);
   } catch (e) {
     if (e instanceof SignerError) return bad(e.status === 503 ? e.message : "the signer could not open a vault for this auction", 503);

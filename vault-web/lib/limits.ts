@@ -37,8 +37,19 @@ export const LIMITS = {
   maxDeliverySec: 30 * 24 * 3600,
   /** An encrypted lot is the content (at most 1 MB) plus a small header and tag. */
   maxLotBytes: 1024 * 1024 + 2048,
+  /** Order Flow: one unit of a batch sale is a code, a key or a short text, not a film. */
+  maxUnitLotBytes: 64 * 1024 + 2048,
   disputeReasonMax: 600,
   envelopeMax: 8000,
   /** Each bid costs the signer a new address to watch. */
   maxBidsPerAuction: 100,
+  /** A deal has one buyer: this many payment addresses at most are made for one deal. */
+  maxDealAcceptances: 5,
+  /** How long a deal's offer can stand. */
+  maxDealOfferSec: 30 * 24 * 3600,
+  /**
+   * Finished deals join the public ledger in batches that close on a fixed
+   * clock: once a day, at midnight UTC. A shorter batch is for tests and demos.
+   */
+  ledgerBatchMs: num("VAULT_LEDGER_BATCH_SEC", 24 * 3600) * 1000,
 };

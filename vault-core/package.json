@@ -4,7 +4,7 @@
   "description": "Dark Vault: sealed bids, time locks, first-price rules, a proof of the result, settlement plans and sealed delivery, for the browser and Node",
   "type": "module",
   "scripts": {
-    "test": "tsx --test test/core.test.ts test/fairness.test.ts test/sealed.test.ts test/timelock.test.ts test/invite.test.ts",
+    "test": "tsx --test test/core.test.ts test/fairness.test.ts test/sealed.test.ts test/timelock.test.ts test/invite.test.ts test/deal.test.ts test/batch.test.ts",
     "typecheck": "tsc -p . --noEmit",
     "verify": "tsx bin/verify.ts"
   },

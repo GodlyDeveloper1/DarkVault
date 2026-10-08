@@ -14,6 +14,18 @@
   --sans: "Space Grotesk Variable", "Space Grotesk", system-ui, sans-serif;
   --mono: "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, monospace;
   --radius: 14px;
+  /* Depth: the edge under a raised thing, the light line on top of it, the rim inside a card. */
+  --edge: #2b2b2b;
+  --hi: #3a3a3a;
+  --rim: #171717;
+  --lime-edge: #86b312;
+  --amber-edge: #a8760f;
+  --red-edge: #a8342c;
+  /* The side of a letter: one flat colour under white type, one under lime. */
+  --type-edge: #6d6d67;
+  --lime-type-edge: #6e8f12;
+  /* The floating header: its slab and the space around it. */
+  --top-h: 70px;
 }
 
 * {
@@ -24,7 +36,7 @@ html {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.55;
   -webkit-text-size-adjust: 100%;
 }
@@ -93,18 +105,29 @@ main {
 }
 
 /* Header and footer */
+/* The header floats above the page as one compact slab. */
 .top {
-  border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  background: var(--bg);
   z-index: 20;
+  padding: 10px 0;
+  pointer-events: none;
 }
 .top-in {
+  pointer-events: auto;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 62px;
+  gap: 14px;
+  height: 50px;
+  padding: 0 8px 0 16px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 5px 0 var(--edge);
 }
 .brand {
   display: inline-flex;
@@ -114,13 +137,14 @@ main {
   font-size: 1.15rem;
   color: var(--text);
   letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 .brand:hover {
   text-decoration: none;
 }
 .brand-mark {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   background: var(--lime);
   border-radius: 4px;
   transform: rotate(45deg);
@@ -138,10 +162,114 @@ main {
 .top nav {
   display: flex;
   align-items: center;
-  gap: 22px;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
 }
-.top nav a:not(.btn) {
+/* The page links sit together in a well cut into the slab. */
+.nav-links {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  margin-right: auto;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 11px;
+}
+.nav-links a {
+  color: var(--muted);
+  font-size: 0.93rem;
+  font-weight: 600;
+  padding: 5px 11px;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+.nav-links a:hover {
   color: var(--text);
+  background: var(--panel-2);
+  text-decoration: none;
+}
+.nav-acts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+/* Three bars: only on a narrow screen. */
+.burger {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  width: 38px;
+  height: 34px;
+  padding: 0;
+  margin-bottom: 3px;
+}
+.burger i {
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--text);
+  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+.burger.on i:nth-child(1) {
+  transform: translateY(6px) rotate(45deg);
+}
+.burger.on i:nth-child(2) {
+  opacity: 0;
+}
+.burger.on i:nth-child(3) {
+  transform: translateY(-6px) rotate(-45deg);
+}
+@media (max-width: 800px) {
+  .burger {
+    display: inline-flex;
+    margin-left: auto;
+  }
+  /* Closed: the links and buttons are hidden. The <nav> itself stays, because the wallet panel lives in it. */
+  .top nav {
+    position: absolute;
+    display: block;
+  }
+  .top nav:not(.open) .nav-links,
+  .top nav:not(.open) .nav-acts > .btn,
+  .top nav:not(.open) #wallet-button {
+    display: none;
+  }
+  .top nav.open {
+    position: absolute;
+    left: -1px;
+    right: -1px;
+    top: calc(100% + 12px);
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 12px 12px 16px;
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 16px;
+    box-shadow:
+      inset 0 1px 0 var(--hi),
+      0 5px 0 var(--edge);
+  }
+  .top nav.open .nav-links {
+    flex-direction: column;
+    margin: 0;
+  }
+  .top nav.open .nav-links a {
+    padding: 10px 12px;
+    font-size: 1rem;
+  }
+  .top nav.open .nav-acts {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .top nav.open .nav-links a,
+  .top nav.open .nav-acts > * {
+    animation: enter 0.3s ease both;
+  }
 }
 .foot {
   border-top: 1px solid var(--line);
@@ -771,9 +899,6 @@ textarea {
   .cols {
     grid-template-columns: minmax(0, 1fr);
   }
-  .top nav {
-    gap: 14px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -963,11 +1088,6 @@ textarea {
 a.pay-link:hover {
   text-decoration: none;
 }
-@media (max-width: 560px) {
-  .top nav a:not(.btn) {
-    display: none;
-  }
-}
 
 /* Delivery */
 .sealed-text {
@@ -1103,4 +1223,2179 @@ a.pay-link:hover {
 }
 .deposit-math .muted {
   font-size: 0.82rem;
+}
+
+/*
+ * How words are written.
+ * A label (a button, a menu item, a heading, a field's name) starts each word
+ * with a capital: "Connect Wallet". A sentence keeps ordinary case and ends
+ * with a full stop.
+ */
+.btn,
+button,
+a.link,
+.nav-links a,
+h2,
+h3,
+label,
+.steps li,
+.stats div span,
+.kv dt,
+.tile .meta span,
+.stakes > div > span,
+.clock > .muted.small:first-child {
+  text-transform: capitalize;
+}
+/* Not what a person typed (a lot's title, a file's name), and not a link or a field in the middle of a sentence. */
+.tile h3,
+#lot-download,
+p button.link,
+p a.link,
+p label,
+.hint button.link,
+.seg label {
+  text-transform: none;
+}
+.seg label b {
+  text-transform: capitalize;
+}
+
+/* ==========================================================================
+ * The home page: a scroll story told with 3D objects.
+ *
+ * The page is a complete, plain document by itself. When the visitor has not
+ * asked for reduced motion, a class on <html> (dv-motion) switches the story
+ * on: the pinned stage, the fades and the objects that follow the pointer.
+ * Plain black, solid colours, no gradients, no glows. Depth comes from the
+ * objects, from layers that move at different speeds and from hard edges.
+ * ========================================================================== */
+.land {
+  padding: 0;
+  overflow-x: clip;
+}
+.land img {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  pointer-events: none;
+}
+.land .lead {
+  font-size: 1.2rem;
+  color: var(--muted);
+  max-width: 36em;
+}
+
+/* Display type with a solid edge under it, like letters cut from a slab. */
+
+.land section > .shell > h2.display,
+.land .sees-copy h2.display,
+.land .limits-head h2.display,
+.land .close h2.display {
+  font-size: clamp(2rem, 4.6vw, 3.6rem);
+  margin: 0 0 0.45em;
+}
+
+/* An object that floats in place. */
+@keyframes bob {
+  0%,
+  100% {
+    translate: 0 0;
+    rotate: 0deg;
+  }
+  50% {
+    translate: 0 -14px;
+    rotate: 2deg;
+  }
+}
+.land .ring {
+  position: absolute;
+  inset: 7%;
+  border: 2px dashed var(--edge);
+  border-radius: 50%;
+  animation: spin 80s linear infinite;
+}
+
+/* The top of a plain page: its title on the left, its main action on the right. */
+.page-head {
+  align-items: flex-end;
+  gap: 20px;
+  margin: 22px 0 30px;
+}
+.page-head h1 {
+  font-size: clamp(2.2rem, 5vw, 3.4rem);
+  margin-bottom: 0.3em;
+}
+.page-head .lead {
+  color: var(--muted);
+  font-size: 1.1rem;
+  max-width: 34em;
+  margin: 0;
+}
+
+/* A link to a place on the page stops below the floating header. */
+.land #story,
+.land #story-orders,
+.land #story-settlement {
+  scroll-margin-top: var(--top-h);
+}
+.land #privacy,
+.land #limits,
+.land #auctions,
+#practice-panel {
+  scroll-margin-top: calc(var(--top-h) + 14px);
+}
+
+/* --- Hero ------------------------------------------------------------------ */
+.land .hero {
+  position: relative;
+  min-height: calc(100svh - var(--top-h));
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 36px 0 96px;
+}
+.hero-in {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  align-items: center;
+  gap: 28px;
+}
+.hero-copy {
+  position: relative;
+  z-index: 2;
+  /* Moves up and fades as the hero scrolls away. It is never tilted or scaled: that would soften the type. */
+  translate: 0 calc(var(--hp, 0) * -80px);
+  opacity: calc(1 - var(--hp, 0) * 1.6);
+}
+.land .hero h1 {
+  font-size: clamp(2.5rem, 6.1vw, 5.3rem);
+  line-height: 1.04;
+}
+.hero-copy > * {
+  animation: enter 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.hero-copy > :nth-child(2) {
+  animation-delay: 0.08s;
+}
+.hero-copy > :nth-child(3) {
+  animation-delay: 0.18s;
+}
+.hero-copy > :nth-child(4) {
+  animation-delay: 0.28s;
+}
+.hero-copy > :nth-child(5) {
+  animation-delay: 0.38s;
+}
+@keyframes enter {
+  from {
+    opacity: 0;
+    translate: 0 26px;
+    filter: blur(10px);
+  }
+}
+
+.hero-art {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  aspect-ratio: 1;
+  justify-self: end;
+}
+.land .obj {
+  position: absolute;
+  width: var(--w);
+  left: var(--l);
+  top: var(--t);
+  /* Follows the pointer by its depth, and flies off on its own course as the hero scrolls away. */
+  transform: translate3d(
+      calc(var(--px, 0) * var(--d) * 1px + var(--hp, 0) * var(--fx) * 1px),
+      calc(var(--py, 0) * var(--d) * 1px + var(--hp, 0) * var(--fy) * 1px),
+      0
+    )
+    rotate(calc(var(--r) + var(--hp, 0) * var(--fr))) scale(calc(1 + var(--hp, 0) * 0.3));
+  opacity: calc(1 - var(--hp, 0) * 1.25);
+  will-change: transform, opacity;
+}
+.obj-in {
+  display: block;
+  animation: arrive 1s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: scale(0.45) translateY(60px);
+    filter: blur(16px);
+  }
+}
+.land .obj img {
+  animation: bob 7s ease-in-out infinite;
+}
+.o-safe {
+  --w: 76%;
+  --l: 12%;
+  --t: 13%;
+}
+.o-safe .obj-in {
+  animation-delay: 0.1s;
+}
+.o-envelope {
+  --w: 35%;
+  --l: -7%;
+  --t: 1%;
+}
+.o-envelope .obj-in {
+  animation-delay: 0.35s;
+}
+.land .o-envelope img {
+  animation-duration: 8.5s;
+  animation-delay: -2s;
+}
+.o-key {
+  --w: 35%;
+  --l: 70%;
+  --t: -5%;
+}
+.o-key .obj-in {
+  animation-delay: 0.45s;
+}
+.land .o-key img {
+  animation-duration: 6s;
+  animation-delay: -1s;
+}
+.o-coin {
+  --w: 31%;
+  --l: 72%;
+  --t: 67%;
+}
+.o-coin .obj-in {
+  animation-delay: 0.55s;
+}
+.land .o-coin img {
+  animation-duration: 5.5s;
+  animation-delay: -3s;
+}
+.o-padlock {
+  --w: 39%;
+  --l: -13%;
+  --t: 57%;
+}
+.o-padlock .obj-in {
+  animation-delay: 0.25s;
+}
+.land .o-padlock img {
+  animation-duration: 6.5s;
+  animation-delay: -4s;
+}
+
+.scroll-cue {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  translate: -50% 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.95rem;
+  text-align: center;
+  opacity: calc(1 - var(--hp, 0) * 5);
+  animation: enter 0.8s 0.9s ease both;
+}
+.scroll-cue:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+.scroll-cue i {
+  width: 2px;
+  height: 30px;
+  background: var(--lime);
+  transform-origin: top;
+  animation: cue 1.8s ease-in-out infinite;
+}
+@keyframes cue {
+  0% {
+    transform: scaleY(0);
+  }
+  55% {
+    transform: scaleY(1);
+  }
+  100% {
+    transform: scaleY(1) translateY(30px);
+    opacity: 0;
+  }
+}
+
+/* --- The scroll story ------------------------------------------------------ */
+.land .story {
+  position: relative;
+  padding: 40px 0;
+}
+.story-in {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 36px;
+  align-items: center;
+  width: 100%;
+}
+.land .story-head {
+  font-size: 1rem;
+  letter-spacing: 0;
+  color: var(--lime);
+  margin: 0 0 22px;
+}
+.story-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+.story-steps li + li {
+  margin-top: 56px;
+}
+.step-art {
+  display: block;
+  width: 110px;
+  margin: 0 0 6px -8px;
+}
+.step-n {
+  font-family: var(--mono);
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+.land .story-steps h3 {
+  font-size: clamp(2rem, 4.3vw, 3.7rem);
+  line-height: 1.05;
+  margin: 0 0 0.4em;
+}
+.step-text {
+  font-size: 1.2rem;
+  color: var(--muted);
+  max-width: 30em;
+  margin: 0;
+}
+.land .rail,
+.land .scene {
+  display: none;
+}
+
+/* What a story offers when it has been told. */
+.story-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 26px;
+}
+
+.story-after {
+  display: none;
+}
+
+/* With motion on: the stage is pinned and the steps play as the page scrolls. Every step gets the same length of scroll, whichever story it is in (six steps: 640vh). */
+html.dv-motion .land .story {
+  height: calc(var(--steps, 6) * 106.6667vh);
+  padding: 0;
+}
+/* A story told the other way round: the stage on the left, the words on the right. */
+@media (min-width: 901px) {
+  html.dv-motion .story.flip .story-in {
+    grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr);
+  }
+  html.dv-motion .story.flip .scene {
+    order: -1;
+  }
+}
+html.dv-motion .story-pin {
+  position: sticky;
+  top: var(--top-h);
+  height: calc(100svh - var(--top-h));
+  display: flex;
+  align-items: center;
+  overflow: clip;
+}
+html.dv-motion .story-steps {
+  height: 23rem;
+}
+html.dv-motion .story-steps li {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  opacity: 0;
+}
+html.dv-motion .story-steps li:first-child {
+  opacity: 1;
+}
+html.dv-motion .step-art {
+  display: none;
+}
+html.dv-motion .land .rail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  margin-top: 26px;
+}
+.land .rail button {
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 8px 8px 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+  gap: 8px;
+}
+.land .rail button i {
+  width: 18px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--edge);
+  transition: width 0.35s ease, background 0.35s ease;
+}
+.story[data-step="0"] .rail button:nth-child(1),
+.story[data-step="1"] .rail button:nth-child(2),
+.story[data-step="2"] .rail button:nth-child(3),
+.story[data-step="3"] .rail button:nth-child(4),
+.story[data-step="4"] .rail button:nth-child(5),
+.story[data-step="5"] .rail button:nth-child(6) {
+  color: var(--text);
+}
+.story[data-step="0"] .rail button:nth-child(1) i,
+.story[data-step="1"] .rail button:nth-child(2) i,
+.story[data-step="2"] .rail button:nth-child(3) i,
+.story[data-step="3"] .rail button:nth-child(4) i,
+.story[data-step="4"] .rail button:nth-child(5) i,
+.story[data-step="5"] .rail button:nth-child(6) i {
+  width: 40px;
+  background: var(--lime);
+}
+
+html.dv-motion .land .scene {
+  display: block;
+  position: relative;
+  width: min(100%, 78svh, 640px);
+  aspect-ratio: 1;
+  justify-self: center;
+}
+.land .actor {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 40%;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.land .actor img {
+  animation: bob 7s ease-in-out infinite;
+}
+.land .actor:nth-child(odd) img {
+  animation-duration: 5.8s;
+  animation-delay: -2.4s;
+}
+.land .actor:nth-child(3n) img {
+  animation-duration: 8s;
+  animation-delay: -4s;
+}
+/* The close: the clock rings. */
+.story[data-story="auction"][data-step="3"] .a-clock img,
+.story[data-story="orders"][data-step="2"] .a-clock img {
+  animation: ringing 0.42s linear infinite;
+}
+@keyframes ringing {
+  0%,
+  100% {
+    rotate: -6deg;
+    translate: -3px 0;
+  }
+  50% {
+    rotate: 6deg;
+    translate: 3px 0;
+  }
+}
+
+/* --- Everything fades in as it arrives and out as it leaves ---------------- */
+html.dv-motion .land [data-reveal] {
+  opacity: 0;
+  translate: 0 36px;
+  filter: blur(10px);
+  transition:
+    opacity 0.95s ease,
+    translate 1.1s cubic-bezier(0.2, 0.8, 0.2, 1),
+    filter 0.95s ease,
+    transform 0.25s ease,
+    border-color 0.25s ease,
+    box-shadow 0.25s ease;
+  transition-delay: calc(var(--i, 0) * 130ms), calc(var(--i, 0) * 130ms), calc(var(--i, 0) * 130ms), 0s, 0s, 0s;
+}
+html.dv-motion .land [data-reveal].is-in {
+  opacity: 1;
+  translate: 0 0;
+  filter: none;
+}
+/* An object that drifts and turns a little as the page scrolls past it. */
+.land .tilt {
+  display: block;
+  transform: translate3d(0, var(--drift, 0px), 0) rotate(var(--turn, 0deg));
+  will-change: transform;
+}
+.land .tilt img {
+  animation: bob 7s ease-in-out infinite;
+}
+
+/* --- What each party can see ----------------------------------------------- */
+.land .sees {
+  padding: 130px 0 110px;
+}
+.sees-in {
+  display: grid;
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
+  gap: 44px;
+  align-items: center;
+}
+.sees-art {
+  max-width: 420px;
+}
+.who {
+  margin-top: 28px;
+}
+.who-switch {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 13px;
+}
+.land .who-switch button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  padding: 10px 16px;
+  border-radius: 9px;
+}
+.land .who-switch button.on {
+  background: var(--lime);
+  color: var(--lime-ink);
+}
+.who-rows {
+  display: grid;
+  gap: 15px;
+  margin: 22px 0 0;
+}
+.who-row {
+  display: grid;
+  grid-template-columns: 15em minmax(0, 1fr);
+  gap: 4px 20px;
+  align-items: baseline;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--edge);
+}
+.who-row dt {
+  font-weight: 700;
+}
+.who-row dd {
+  margin: 0;
+  font-size: 1.05rem;
+  animation: swap 0.45s ease both;
+}
+.who-row.nothing {
+  border-color: var(--lime);
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--lime-edge);
+}
+.who-row.nothing dd {
+  color: var(--lime);
+  font-weight: 700;
+}
+@keyframes swap {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+    filter: blur(6px);
+  }
+}
+
+/* --- Nine protections: slabs that lean towards the pointer ----------------- */
+.land .protect {
+  padding: 40px 0 120px;
+}
+.protect-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 84px 22px;
+  margin-top: 96px;
+  perspective: 1400px;
+}
+.land .slab {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 18px;
+  padding: 70px 22px 24px;
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 8px 0 var(--edge);
+  transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transform-style: preserve-3d;
+  transition: transform 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
+}
+.land .slab:hover {
+  border-color: var(--lime);
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 8px 0 var(--lime-edge);
+}
+.slab-art {
+  position: absolute;
+  top: -66px;
+  left: 12px;
+  width: 132px;
+  transform: translateZ(50px);
+  transition: transform 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.slab:hover .slab-art {
+  transform: translateZ(90px) scale(1.1) rotate(-7deg);
+}
+.land .slab h3 {
+  color: var(--lime);
+  font-size: 1.3rem;
+}
+.land .slab p {
+  margin: 0;
+  color: var(--muted);
+}
+
+/* --- What this does not do ------------------------------------------------- */
+.land .limits {
+  padding: 30px 0 120px;
+}
+.limits-in {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  gap: 52px;
+  align-items: start;
+}
+.limits-head {
+  position: sticky;
+  top: 110px;
+}
+.limits-art {
+  display: block;
+  width: 150px;
+  margin: 0 0 12px -10px;
+}
+.limits-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.limits-list li {
+  display: grid;
+  gap: 6px;
+  padding: 24px 0;
+  border-top: 1px solid var(--edge);
+}
+.limits-list li:last-child {
+  border-bottom: 1px solid var(--edge);
+}
+.limits-list b {
+  font-size: 1.3rem;
+  line-height: 1.25;
+}
+.limits-list span {
+  color: var(--muted);
+  font-size: 1.05rem;
+}
+
+/* --- Practice and the auctions --------------------------------------------- */
+.land .act {
+  padding-top: 10px;
+  padding-bottom: 110px;
+}
+
+/* --- The last word --------------------------------------------------------- */
+.land .close {
+  padding: 30px 0 130px;
+  text-align: center;
+}
+.close-in {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.close-art {
+  display: block;
+  width: min(340px, 62vw);
+}
+.land .close .lead {
+  margin: 0 auto;
+}
+.land .close .cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 28px;
+}
+
+@media (max-width: 900px) {
+  .land .hero {
+    padding: 18px 0 124px;
+  }
+  .hero-in {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .hero-art {
+    order: -1;
+    width: min(64vw, 36svh);
+    justify-self: center;
+  }
+  .story-in {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  /* The stage gives way first on a short screen, so the words and the step bar always fit. */
+  html.dv-motion .land .scene {
+    order: -1;
+    width: min(70vw, 38svh, calc(100svh - var(--top-h) - 25rem));
+  }
+  html.dv-motion .story-pin .story-acts {
+    display: none;
+  }
+  html.dv-motion .story-after {
+    display: block;
+    padding: 4px 0 56px;
+  }
+  html.dv-motion .story-after .story-acts {
+    margin-top: 0;
+  }
+  /* The words start right under the story's name, and the box is as tall as the longest step on a narrow phone. */
+  html.dv-motion .story-steps {
+    height: 18.5rem;
+  }
+  html.dv-motion .story-steps li {
+    justify-content: flex-start;
+  }
+  .land .story-head {
+    margin-bottom: 10px;
+  }
+  .land .story-steps h3 {
+    font-size: clamp(1.7rem, 7vw, 2.4rem);
+  }
+  .step-text {
+    font-size: 1.08rem;
+  }
+  html.dv-motion .land .rail {
+    margin-top: 10px;
+    gap: 6px;
+  }
+  /* Six bars in a row: no room for the words. */
+  .land .rail button {
+    font-size: 0;
+    padding: 10px 0;
+    gap: 0;
+  }
+  .sees-in,
+  .limits-in {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+  .sees-art {
+    max-width: 220px;
+  }
+  .land .sees {
+    padding: 90px 0 80px;
+  }
+  .limits-head {
+    position: static;
+  }
+  .who-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .protect-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .protect-grid {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 100px;
+  }
+}
+
+/* ==========================================================================
+ * Depth, everywhere. Every button is a key that goes down when pressed,
+ * every card is a slab with a rim and an edge under it, and headings and
+ * coloured words are cut from a slab too. All of it is solid colour: hard
+ * edges, no blur, no glow.
+ * ========================================================================== */
+
+/* --- Keys ------------------------------------------------------------------ */
+.btn,
+button {
+  padding: 8px 15px;
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 4px 0 var(--edge);
+  transition: transform 0.1s ease, box-shadow 0.1s ease, background 0.12s ease, border-color 0.12s ease;
+}
+.btn:hover,
+button:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 5px 0 var(--edge);
+}
+.btn:active,
+button:active:not(:disabled) {
+  transform: translateY(3px);
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 1px 0 var(--edge);
+}
+.btn.primary,
+button.primary,
+.land .who-switch button.on {
+  box-shadow:
+    inset 0 1px 0 #efffb0,
+    0 4px 0 var(--lime-edge);
+}
+.btn.primary:hover,
+button.primary:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 #efffb0,
+    0 5px 0 var(--lime-edge);
+}
+.btn.primary:active,
+button.primary:active:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 #efffb0,
+    0 1px 0 var(--lime-edge);
+}
+.btn.sm {
+  padding: 6px 12px;
+}
+.btn.lg,
+button.lg {
+  padding: 11px 20px;
+  font-size: 1rem;
+}
+button:disabled {
+  box-shadow: 0 4px 0 #1a1a1a;
+}
+.wallet-btn {
+  padding: 6px 12px;
+  box-shadow: 0 4px 0 var(--lime-edge);
+}
+.wallet-btn:hover:not(:disabled) {
+  box-shadow: 0 5px 0 var(--lime-edge);
+}
+.wallet-btn.on,
+.wallet-btn.on:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 4px 0 var(--edge);
+}
+/* Not keys: a link that happens to be a button, and the small switches. */
+button.link,
+button.link:hover:not(:disabled),
+button.link:active:not(:disabled),
+.land .rail button,
+.land .rail button:hover:not(:disabled),
+.land .rail button:active:not(:disabled),
+.land .who-switch button:not(.on) {
+  box-shadow: none;
+}
+button.link:active:not(:disabled),
+.land .rail button:active:not(:disabled) {
+  transform: none;
+}
+
+/* --- Slabs ----------------------------------------------------------------- */
+.card,
+.tile,
+.clock {
+  border-radius: 16px;
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--edge);
+}
+.card,
+.tile {
+  padding: 18px 20px;
+}
+/* A choice on a form is a key too: the chosen one has the lime edge. */
+.seg label {
+  box-shadow: 0 4px 0 var(--edge);
+}
+.seg label.on {
+  box-shadow: 0 4px 0 var(--lime-edge);
+}
+.seg {
+  row-gap: 14px;
+}
+.card {
+  margin-bottom: 22px;
+}
+.card.accent,
+.tile:hover {
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--lime-edge);
+}
+.card.warn {
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--amber-edge);
+}
+.card.bad {
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--red-edge);
+}
+.grid {
+  row-gap: 24px;
+}
+
+/* --- Type cut from a slab -------------------------------------------------- */
+/* Whole pixels and one solid colour: the edge reads as the side of the letter, never as a soft shadow. */
+h1,
+.land .display {
+  text-shadow:
+    0 1px 0 var(--type-edge),
+    0 2px 0 var(--type-edge),
+    0 3px 0 var(--type-edge),
+    0 4px 0 var(--type-edge);
+}
+/* Smaller type gets a thinner, sharper edge, so it stays easy to read. */
+h2 {
+  text-shadow:
+    0 1px 0 var(--type-edge),
+    0 2px 0 var(--type-edge);
+}
+h3,
+.brand {
+  text-shadow: 0 1px 0 var(--type-edge);
+}
+@media (max-width: 900px) {
+  h1,
+  .land .display {
+    text-shadow:
+      0 1px 0 var(--type-edge),
+      0 2px 0 var(--type-edge),
+      0 3px 0 var(--type-edge);
+  }
+  h1 .lime,
+  .land .display .lime {
+    text-shadow:
+      0 1px 0 var(--lime-type-edge),
+      0 2px 0 var(--lime-type-edge),
+      0 3px 0 var(--lime-type-edge);
+  }
+}
+/* Coloured words get an edge of their own colour. */
+h1 .lime,
+.land .display .lime {
+  text-shadow:
+    0 1px 0 var(--lime-type-edge),
+    0 2px 0 var(--lime-type-edge),
+    0 3px 0 var(--lime-type-edge),
+    0 4px 0 var(--lime-type-edge);
+}
+.lime,
+.ok,
+.kicker,
+.facts h3,
+.land .slab h3,
+.land .story-head,
+.who-row.nothing dd {
+  text-shadow: 0 1px 0 var(--lime-type-edge);
+}
+h2.lime,
+h2 .lime {
+  text-shadow:
+    0 1px 0 var(--lime-type-edge),
+    0 2px 0 var(--lime-type-edge);
+}
+.error {
+  text-shadow: 0 1px 0 var(--red-edge);
+}
+/* Small things inside a heading keep their own plain text. */
+.badge,
+h1 .btn,
+h2 .btn,
+h3 .btn,
+h1 button,
+h2 button,
+h3 button,
+h1 small,
+h2 small,
+h3 small {
+  text-shadow: none;
+}
+
+/* ==========================================================================
+ * "Privacy At Its Peak." The line the site stands behind. It is never small
+ * print: a lime key wherever it appears, and a band of huge type on the
+ * landing page.
+ * ========================================================================== */
+.peak {
+  display: inline-block;
+  margin: 0 0 16px;
+  padding: 7px 15px 8px;
+  background: var(--lime);
+  color: var(--lime-ink);
+  font-weight: 700;
+  font-size: clamp(1.15rem, 2vw, 1.7rem);
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  border-radius: 11px;
+  text-shadow: none;
+  box-shadow:
+    inset 0 1px 0 #efffb0,
+    0 5px 0 var(--lime-edge);
+}
+.peak.sm {
+  justify-self: start;
+  margin: 0;
+  padding: 3px 9px 4px;
+  font-size: 0.84rem;
+  border-radius: 7px;
+  box-shadow:
+    inset 0 1px 0 #efffb0,
+    0 3px 0 var(--lime-edge);
+}
+.hero-copy .kicker {
+  display: block;
+}
+
+.peak-band {
+  overflow-x: clip;
+  padding: 90px 0 0;
+}
+.peak-run {
+  display: flex;
+  width: max-content;
+  animation: slide 44s linear infinite;
+}
+.peak-run span {
+  display: flex;
+  align-items: center;
+  gap: 0.32em;
+  padding-right: 0.32em;
+  font-size: clamp(3.4rem, 11vw, 9.4rem);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+  color: var(--lime);
+  text-shadow:
+    0 1px 0 var(--lime-type-edge),
+    0 2px 0 var(--lime-type-edge),
+    0 3px 0 var(--lime-type-edge),
+    0 4px 0 var(--lime-type-edge),
+    0 5px 0 var(--lime-type-edge),
+    0 6px 0 var(--lime-type-edge);
+}
+.peak-run i {
+  flex: none;
+  width: 0.3em;
+  height: 0.3em;
+  border-radius: 0.06em;
+  background: var(--text);
+  rotate: 45deg;
+  box-shadow: 4px 4px 0 var(--type-edge);
+}
+@keyframes slide {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+/* ==========================================================================
+ * The app frame: a sidebar beside every page except the landing page.
+ * The sidebar is a slab like the header, and the page it points at is a key.
+ * ========================================================================== */
+.app {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 246px minmax(0, 1fr);
+  min-height: 100vh;
+}
+.app-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.side {
+  position: sticky;
+  top: 10px;
+  z-index: 30;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  height: calc(100svh - 26px);
+  margin: 10px 0 0 10px;
+  padding: 14px 10px 12px;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 6px 0 var(--edge);
+}
+.side-brand {
+  padding: 4px 8px 14px;
+}
+.side-group {
+  margin-bottom: 12px;
+}
+.side-title {
+  margin: 8px 10px 6px;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #7c7c75;
+}
+.side-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 5px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  color: var(--muted);
+  font-weight: 600;
+  transition: color 0.12s ease, background 0.12s ease, transform 0.1s ease;
+}
+/* The icon sits on a small key of its own, so the row still reads as cut from a slab. */
+.side-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 9px;
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 2px 0 var(--edge);
+  color: var(--lime);
+  font-size: 17px;
+  font-style: normal;
+  transition:
+    transform 0.25s cubic-bezier(0.2, 0.8, 0.2, 1),
+    color 0.12s ease;
+}
+.side-link:hover {
+  color: var(--text);
+  background: var(--panel-2);
+  text-decoration: none;
+}
+.side-link:hover .side-ico {
+  transform: translateY(-2px) rotate(-6deg);
+}
+.side-link.on .side-ico {
+  border-color: #0a0a0a;
+  box-shadow: 0 2px 0 var(--lime-edge);
+}
+.side-link.on {
+  color: var(--lime-ink);
+  background: var(--lime);
+  border-color: var(--lime);
+  box-shadow:
+    inset 0 1px 0 #efffb0,
+    0 3px 0 var(--lime-edge);
+}
+.side-link:active {
+  transform: translateY(2px);
+}
+.side-wallet {
+  margin-top: auto;
+  padding: 12px 4px 14px;
+}
+.side-wallet .wallet-btn {
+  width: 100%;
+}
+.side-foot {
+  display: grid;
+  gap: 9px;
+  padding: 14px 8px 2px;
+  border-top: 1px solid var(--edge);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.side-credit {
+  margin: 0;
+  font-size: 0.78rem;
+}
+.topbar,
+.scrim {
+  display: none;
+}
+.topbar .burger {
+  display: inline-flex;
+  margin: 0 0 3px;
+}
+@media (max-width: 960px) {
+  .app {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+  }
+  .topbar {
+    position: sticky;
+    top: 10px;
+    z-index: 28;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 50px;
+    margin: 10px 12px 0;
+    padding: 0 8px 0 16px;
+    background: var(--panel);
+    border: 1px solid var(--edge);
+    border-radius: 16px;
+    box-shadow:
+      inset 0 1px 0 var(--hi),
+      0 5px 0 var(--edge);
+  }
+  /* Folded away to the left. Moved with `left`, never a transform: the wallet panel inside must stay free of it. */
+  .side {
+    position: fixed;
+    top: 10px;
+    left: -290px;
+    z-index: 40;
+    width: 262px;
+    margin: 0;
+    transition: left 0.28s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  .side.open {
+    left: 10px;
+  }
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 35;
+  }
+}
+
+/* --- The Vault Guide, in the corner ---------------------------------------- */
+.dock {
+  position: fixed;
+  right: 16px;
+  bottom: 18px;
+  z-index: 25;
+}
+.guide-anchor {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.guide-fab {
+  gap: 6px;
+  padding: 5px 15px 5px 7px;
+  border-radius: 999px;
+}
+.guide-fab.on {
+  border-color: var(--lime);
+}
+/* The guide's face. It does not bob or nod: it watches, and its grille moves when it answers. */
+.gbot {
+  flex: none;
+  display: block;
+  overflow: visible;
+}
+.gbot-lamp {
+  fill: #6d6d67;
+}
+.gbot.talk .gbot-lamp {
+  fill: var(--lime);
+}
+.gbot-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: gbot-watch 7s ease-in-out infinite;
+}
+.gbot-bar {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.gbot.talk .gbot-bar {
+  animation: gbot-speak 0.42s ease-in-out infinite alternate;
+}
+.gbot.talk .gbot-bar:nth-child(2) {
+  animation-delay: -0.14s;
+}
+.gbot.talk .gbot-bar:nth-child(3) {
+  animation-delay: -0.28s;
+}
+.gbot.talk .gbot-bar:nth-child(4) {
+  animation-delay: -0.07s;
+}
+@keyframes gbot-watch {
+  0%,
+  18% {
+    transform: translateX(0) scaleY(1);
+  }
+  26%,
+  44% {
+    transform: translateX(-2px) scaleY(1);
+  }
+  52%,
+  70% {
+    transform: translateX(2px) scaleY(1);
+  }
+  78%,
+  90% {
+    transform: translateX(0) scaleY(1);
+  }
+  93% {
+    transform: translateX(0) scaleY(0.12);
+  }
+  96%,
+  100% {
+    transform: translateX(0) scaleY(1);
+  }
+}
+@keyframes gbot-speak {
+  from {
+    transform: scaleY(0.35);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gbot-eyes,
+  .gbot.talk .gbot-bar {
+    animation: none;
+  }
+}
+.g-peek {
+  max-width: 240px;
+  padding: 9px 13px;
+  border-color: var(--lime);
+  border-radius: 14px 14px 4px 14px;
+  background: var(--panel);
+  font-weight: 500;
+  text-align: left;
+  text-transform: none;
+  box-shadow: 0 4px 0 var(--lime-edge);
+  animation: rise 0.3s ease both;
+}
+.guide {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 14px);
+  display: flex;
+  flex-direction: column;
+  width: min(392px, calc(100vw - 32px));
+  height: min(590px, calc(100svh - 130px));
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 7px 0 var(--edge);
+  animation: rise 0.25s ease both;
+}
+.g-head {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 13px 16px 12px;
+  border-bottom: 1px solid var(--edge);
+}
+.g-head h3 {
+  margin: 0 0 2px;
+}
+.g-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+.g-head .link {
+  align-self: flex-start;
+  margin-left: auto;
+}
+.g-list {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 14px 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.g-msg {
+  display: flex;
+}
+.g-msg.me {
+  justify-content: flex-end;
+}
+.g-bubble {
+  max-width: 90%;
+  padding: 9px 12px;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 14px 14px 14px 4px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.g-msg.me .g-bubble {
+  background: var(--lime);
+  border-color: var(--lime);
+  border-radius: 14px 14px 4px 14px;
+  color: var(--lime-ink);
+  font-weight: 600;
+}
+.g-caret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--lime);
+  animation: blink 0.8s steps(1) infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+.g-typing {
+  display: flex;
+  gap: 5px;
+  padding: 13px 14px;
+}
+.g-typing i,
+.loader-dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--lime);
+  animation: hop 0.9s ease-in-out infinite;
+}
+.g-typing i:nth-child(2),
+.loader-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.g-typing i:nth-child(3),
+.loader-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes hop {
+  0%,
+  60%,
+  100% {
+    translate: 0 0;
+  }
+  30% {
+    translate: 0 -6px;
+  }
+}
+.g-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+.g-actions button {
+  padding: 6px 12px;
+  font-size: 0.9rem;
+}
+.g-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 8px 14px 10px;
+}
+.g-chips button {
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-transform: none;
+  box-shadow: 0 3px 0 var(--edge);
+}
+.g-input {
+  display: flex;
+  gap: 8px;
+  padding: 11px 14px 17px;
+  border-top: 1px solid var(--edge);
+}
+.g-input input {
+  flex: 1;
+  padding: 8px 12px;
+}
+
+/* --- The dashboard ---------------------------------------------------------- */
+.dash-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0 0 30px;
+}
+.stat-slab {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-areas:
+    "art num"
+    "art label";
+  column-gap: 12px;
+  align-items: center;
+  padding: 14px 16px 15px 12px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--edge);
+  animation: rise 0.4s ease both;
+}
+.stat-slab:nth-child(2) {
+  animation-delay: 0.06s;
+}
+.stat-slab:nth-child(3) {
+  animation-delay: 0.12s;
+}
+.stat-slab:nth-child(4) {
+  animation-delay: 0.18s;
+}
+.stat-slab img {
+  grid-area: art;
+  width: 58px;
+  height: 58px;
+  animation: bob 6s ease-in-out infinite;
+}
+.stat-slab:nth-child(even) img {
+  animation-delay: -2.5s;
+}
+.stat-slab b {
+  grid-area: num;
+  align-self: end;
+  font-size: 1.9rem;
+  line-height: 1;
+}
+.stat-slab b.mono {
+  font-size: 1.35rem;
+}
+.stat-slab span {
+  grid-area: label;
+  align-self: start;
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.stat-slab span i {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-style: normal;
+  font-weight: 400;
+}
+.dash-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 20px;
+  align-items: start;
+  margin-bottom: 8px;
+}
+.todo {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+}
+.todo li {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 12px;
+  padding: 13px 0;
+  border-top: 1px solid var(--edge);
+}
+.todo li > i {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  background: var(--bg);
+  border: 2px solid var(--edge);
+  border-radius: 9px;
+}
+.todo li.done > i {
+  border-color: var(--lime);
+}
+.todo li > i img {
+  width: 24px;
+  height: 24px;
+  animation: pop 0.3s ease both;
+}
+.todo b {
+  display: block;
+}
+.todo li.done b {
+  color: var(--lime);
+}
+.todo span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+.todo .link {
+  display: inline-block;
+  margin-top: 6px;
+  font-weight: 600;
+}
+@media (max-width: 1180px) {
+  .dash-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .dash-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 460px) {
+  .dash-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- While a page is being put together ------------------------------------- */
+.loader {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  min-height: 62svh;
+  padding: 40px 20px;
+}
+.loader-in {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+  /* A page that is ready at once never shows it. */
+  animation: enter 0.3s 0.12s ease both;
+}
+.loader-art {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 150px;
+  height: 150px;
+}
+.loader-art .ring {
+  position: absolute;
+  inset: 0;
+  border: 3px dashed var(--lime);
+  border-radius: 50%;
+  animation: spin 2.6s linear infinite;
+}
+.loader-art img {
+  width: 92px;
+  height: 92px;
+  animation: bob 1.5s ease-in-out infinite;
+}
+.loader-title {
+  margin: 6px 0 0;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-shadow:
+    0 1px 0 var(--type-edge),
+    0 2px 0 var(--type-edge);
+}
+.loader-dots {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 6px;
+}
+/* The tagline sits in the middle, under the vault, like everything else here. (Elsewhere a small one keeps to the left.) */
+.loader-in .peak.sm {
+  justify-self: center;
+}
+
+/* The "hide my bid" choice on the bid form. */
+.hide-bid {
+  margin: 16px 0 2px;
+  padding: 12px 14px 4px;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+}
+.hide-bid label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+  cursor: pointer;
+  text-transform: none;
+}
+.hide-bid input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  accent-color: var(--lime);
+}
+
+
+/* ---------- Move To Another Browser ---------- */
+.move {
+  margin-top: 26px;
+  scroll-margin-top: 24px;
+}
+.move-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
+.move-head h2 {
+  margin: 0 0 4px;
+}
+.move-head p {
+  margin: 0;
+  max-width: 70ch;
+  color: var(--muted);
+}
+.move-ico,
+.settle-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  background: var(--lime);
+  border-radius: 12px;
+  box-shadow:
+    inset 0 1px 0 #efffb0,
+    0 4px 0 var(--lime-edge);
+  color: var(--lime-ink);
+  font-size: 24px;
+  font-style: normal;
+}
+.move-cols {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+.move-box {
+  padding: 16px 16px 18px;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+}
+.move-box h3 {
+  margin: 0 0 6px;
+}
+.move-box p.small {
+  margin: 0 0 12px;
+  color: var(--muted);
+}
+.move-box p.small b {
+  color: var(--text);
+}
+.move-box .hint {
+  margin: 8px 0 14px;
+}
+.move-box button svg {
+  font-size: 1.15em;
+  vertical-align: -0.16em;
+  margin-right: 4px;
+}
+.move-unlock .row {
+  margin-top: 12px;
+}
+.move-ok {
+  margin: 16px 0 0;
+  color: var(--lime);
+  font-weight: 600;
+}
+.move > .error {
+  margin: 16px 0 0;
+}
+@media (max-width: 760px) {
+  .move-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---------- Settlement ---------- */
+.settle-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.settle-step {
+  position: relative;
+  padding: 18px 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 0 0 4px var(--rim),
+    0 6px 0 var(--edge);
+  animation: rise 0.5s ease both;
+}
+.settle-step h3 {
+  margin: 14px 0 6px;
+}
+.settle-step p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+.settle-n {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  color: #55554f;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+/* Each step hands over to the next: the icon tips forward in turn. */
+.settle-step .settle-ico {
+  animation: settle-pass 6s ease-in-out infinite;
+}
+.settle-step:nth-child(2) .settle-ico {
+  animation-delay: 1.5s;
+}
+.settle-step:nth-child(3) .settle-ico {
+  animation-delay: 3s;
+}
+.settle-step:nth-child(4) .settle-ico {
+  animation-delay: 4.5s;
+}
+@keyframes settle-pass {
+  0%,
+  8%,
+  100% {
+    transform: translateY(0) rotate(0);
+  }
+  4% {
+    transform: translateY(-5px) rotate(-8deg);
+  }
+}
+.settle-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  margin-bottom: 30px;
+}
+.settle-stats div {
+  padding: 14px 16px;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  animation: rise 0.5s ease 0.3s both;
+}
+.settle-stats b {
+  display: block;
+  font-size: 1.7rem;
+  line-height: 1.1;
+}
+.settle-stats b.mono {
+  font-size: 1.35rem;
+  line-height: 1.38;
+  color: var(--lime);
+}
+.settle-stats span {
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.ledger {
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-radius: 16px;
+  box-shadow:
+    inset 0 1px 0 var(--hi),
+    0 6px 0 var(--edge);
+  overflow: hidden;
+}
+.ledger-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1.1fr) minmax(0, 0.7fr) minmax(0, 1.2fr) minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 14px;
+  align-items: start;
+  padding: 14px 18px;
+  border-top: 1px solid var(--edge);
+  font-size: 0.95rem;
+  animation: rise 0.45s ease both;
+}
+.ledger-row:hover {
+  background: var(--panel-2);
+}
+.ledger-head,
+.ledger-head:hover {
+  border-top: 0;
+  background: var(--bg);
+  color: #7c7c75;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  animation: none;
+}
+.ledger-lot a {
+  color: var(--text);
+  font-weight: 600;
+}
+.ledger-lot .badge {
+  margin-left: 8px;
+  font-style: normal;
+}
+.ledger-tone {
+  font-weight: 600;
+}
+.ledger-tone.lime {
+  color: var(--lime);
+}
+.ledger-tone.amber {
+  color: var(--amber);
+}
+.ledger-tone.red {
+  color: var(--red);
+}
+.ledger-sub {
+  display: block;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-style: normal;
+  font-weight: 400;
+}
+.ledger-check {
+  font-weight: 700;
+}
+.settle-note {
+  margin-top: 26px;
+}
+.settle-note h3 {
+  margin: 0 0 6px;
+}
+.settle-note p {
+  margin: 0;
+  max-width: 78ch;
+  color: var(--muted);
+}
+#verify-card {
+  scroll-margin-top: 24px;
+}
+@media (max-width: 1180px) {
+  .settle-steps,
+  .settle-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .ledger-head {
+    display: none;
+  }
+  .ledger-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 12px 14px;
+  }
+  .ledger-row:first-of-type,
+  .ledger-head + .ledger-row {
+    border-top: 0;
+  }
+  .ledger-lot {
+    grid-column: 1 / -1;
+    font-size: 1.05rem;
+  }
+  .ledger-row [data-label]:not(.ledger-lot)::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 2px;
+    color: #7c7c75;
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    font-weight: 400;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+}
+@media (max-width: 520px) {
+  .settle-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settle-step .settle-ico {
+    animation: none;
+  }
+}
+
+
+/* ---------- Settlement: private deals ---------- */
+.settle-cols {
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  margin-bottom: 20px;
+}
+.settle-cols > * {
+  margin: 0;
+}
+.deal-role {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  vertical-align: 2px;
+}
+#deal-sees {
+  margin-bottom: 22px;
+}
+#deal-sees h2,
+#my-deals h2,
+#open-deal-form h2 {
+  margin-top: 0;
+}
+/* A tick box with its explanation beside it. */
+label.check {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 22px;
+  padding: 13px 14px;
+  background: var(--bg);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  font-weight: 400;
+  text-transform: none;
+  cursor: pointer;
+}
+label.check input {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 3px;
+  padding: 0;
+  accent-color: var(--lime);
+}
+label.check span {
+  color: var(--muted);
+  font-size: 0.93rem;
+}
+label.check b {
+  color: var(--text);
+}
+.ledger-lot b {
+  font-weight: 600;
+}
+
+/* --- Landing: the markets --------------------------------------------------- */
+.land .markets {
+  padding: 110px 0 60px;
+  scroll-margin-top: calc(var(--top-h) + 24px);
+}
+.land .markets .lead {
+  max-width: 62ch;
+}
+.markets-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 84px 26px;
+  margin-top: 104px;
+  perspective: 1400px;
+}
+.land .markets .slab {
+  display: flex;
+  flex-direction: column;
+}
+.land .markets .slab p {
+  flex: 1;
+}
+.land .markets .slab .btn {
+  margin-top: 18px;
+  align-self: flex-start;
+}
+.slab-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+}
+@media (max-width: 980px) {
+  .markets-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Order Flow: batch sales -------------------------------------------------- */
+.badge.units-tag {
+  border-color: var(--text);
+  color: var(--text);
+}
+.sale-tile .units-tag,
+.wb-title .units-tag,
+.ledger-lot .units-tag {
+  margin-left: 8px;
+}
+.wb-title .badge {
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  vertical-align: 2px;
+  font-style: normal;
+}
+textarea.units-box {
+  min-height: 150px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow-x: auto;
+}
+.unit-row {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  padding: 12px 14px;
+  margin-top: 10px;
+}
+.unit-row .unit-price {
+  color: var(--lime);
+  font-weight: 600;
+}
+.unit-row .unit-delivery p.small {
+  margin: 6px 0 0;
+}
+.unit-row .unit-delivery .card {
+  margin-top: 10px;
+}
+#order-rule h2,
+#order-sees h2 {
+  margin-top: 0;
+}
+/* The list of sales keeps its distance from the card below it. */
+#sales {
+  margin-bottom: 26px;
+}
+/* The winner's payments sit under the handover, not against its buttons. */
+#winner-delivery + dl.kv {
+  margin-top: 16px;
 }

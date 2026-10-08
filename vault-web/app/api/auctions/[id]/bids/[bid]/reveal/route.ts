@@ -8,7 +8,7 @@
 import { opens, pedersenOpens } from "vault-core";
 import { advance } from "@/lib/engine";
 import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
-import { withAuction } from "@/lib/store";
+import { loadAuction, withAuction } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +24,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 0) return bad("invalid amount");
   if (!/^[0-9a-f]{64}$/.test(nonce)) return bad("invalid nonce");
 
+  // A deal has a fixed price and nothing to reveal. The same answer as for an id that isn't there, before any work is done.
+  const known = await loadAuction(id);
+  if (!known || known.deal || !known.bids.some((b) => b.id === bidId)) return bad("not found", 404);
   await advance(id, true); // close the auction first, if its time has come
   const result = await withAuction(id, async (auction) => {
     const bid = auction.bids.find((b) => b.id === bidId);

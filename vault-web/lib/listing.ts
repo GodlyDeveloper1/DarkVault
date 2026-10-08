@@ -5,14 +5,15 @@ import "server-only";
 import { newId } from "vault-core";
 import { advance, lockInTime } from "./engine";
 import { createVault, newDepositAddress } from "./signer";
-import { createAuction, saveLot } from "./store";
+import { createAuction, saveLot, saveUnitLot } from "./store";
 import type { Auction, Delivery } from "./types";
 
 export interface Listing {
   title: string;
   description: string;
   reserve: number;
-  ceiling: number;
+  /** The highest bid allowed, for an auction with same-size deposits. Left out, a deposit is the bid plus the bond and there is no highest bid. */
+  ceiling?: number;
   durationSec: number;
   revealSec: number;
   payout: string;
@@ -25,6 +26,10 @@ export interface Listing {
   house?: Auction["house"];
   /** A private auction: the encrypted listing and the hash of the invite's access token. */
   private?: Auction["private"];
+  /** A private deal (Settlement): a fixed price and no bidding. `reserve` is the price. */
+  deal?: Auction["deal"];
+  /** A batch sale (Order Flow): the encrypted lot of each unit, with the hash of its key. `reserve` is the lowest price per unit. */
+  unitLots?: { key_hash: string; bytes: Uint8Array }[];
 }
 
 /** Opens the vaults and saves the auction. Throws SignerError if the signer can't be reached. */
@@ -39,14 +44,16 @@ export async function createListing(l: Listing): Promise<Auction> {
     escrow = { escrow_vault_id: held.vault_id, escrow_address: await newDepositAddress(held.vault_id) };
   }
   if (l.lot) await saveLot(id, l.lot);
+  if (l.unitLots) for (let i = 0; i < l.unitLots.length; i++) await saveUnitLot(id, i, l.unitLots[i]!.bytes);
   const record: Auction = {
     id,
     created_at: now,
     title: l.title,
     description: l.description,
-    scheme: 2,
+    // A deal has no sealed bids, so none of scheme 2 (commitments, time lock, proof) applies to it.
+    ...(l.deal ? { deal: l.deal } : { scheme: 2 as const }),
     reserve: l.reserve,
-    ceiling: l.ceiling,
+    ...(l.ceiling != null ? { ceiling: l.ceiling } : {}),
     ends_at: now + l.durationSec * 1000,
     duration_seconds: l.durationSec,
     reveal_seconds: l.revealSec,
@@ -55,6 +62,7 @@ export async function createListing(l: Listing): Promise<Auction> {
     ...(l.delivery && escrow ? { delivery: { ...l.delivery, ...escrow } } : {}),
     ...(l.house ? { house: l.house } : {}),
     ...(l.private ? { private: l.private } : {}),
+    ...(l.unitLots ? { batch: { units: l.unitLots.length, lots: l.unitLots.map((u) => ({ key_hash: u.key_hash, bytes: u.bytes.length })) } } : {}),
     // With a bond, bidding opens when the seller's bond has arrived.
     state: l.delivery && l.delivery.seller_bond > 0 ? "funding" : "open",
     bids: [],

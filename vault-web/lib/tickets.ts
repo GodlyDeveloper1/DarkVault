@@ -7,7 +7,7 @@
 // they win. On older auctions the ticket is the only way to reveal the bid.
 
 import { bidToken, QUICKNET, roundTimeMs, sealedFor, type BeaconChain, type Receipt } from "vault-core";
-import { rememberInvite } from "./invites";
+import { holdsInvite, rememberInvite } from "./invites";
 
 export interface Ticket {
   auction_id: string;
@@ -49,6 +49,11 @@ export interface Ticket {
   closes_at?: number;
   /** Placed with a practice wallet: the site's house purse funds the deposit and receives the refund. */
   practice?: boolean;
+  /**
+   * Zatoshis the bidder chose to deposit, when that is more than the bid and
+   * the bond: a round amount, so the site can't work the bid out from it.
+   */
+  send?: number;
   /**
    * 64 hex characters. A bid in a private auction: the invite key that opens
    * the auction, so a ticket restored in another browser can find its way
@@ -95,24 +100,34 @@ export function announce() {
   }
 }
 
+/** A string of exactly this many hex characters. (A bare regex test would also pass an array holding one.) */
+const hex = (v: unknown, chars: number): v is string => typeof v === "string" && v.length === chars && /^[0-9a-f]+$/.test(v);
+const optional = (v: unknown, ok: (v: unknown) => boolean) => v === undefined || ok(v);
+
+/** Is this a well-formed ticket for this auction? A ticket can come from a file, so nothing about it is taken on trust. */
 function valid(t: unknown, auctionId: string): t is Ticket {
   const x = t as Ticket;
   return (
     !!x &&
+    typeof x === "object" &&
+    typeof auctionId === "string" &&
     x.auction_id === auctionId &&
-    /^[0-9a-f]{32}$/.test(x.bid_id) &&
+    hex(x.bid_id, 32) &&
     Number.isSafeInteger(x.amount) &&
     x.amount >= 0 &&
-    /^[0-9a-f]{64}$/.test(x.nonce) &&
+    hex(x.nonce, 64) &&
     typeof x.deposit_address === "string" &&
-    (x.delivery_key === undefined || /^[0-9a-f]{64}$/.test(x.delivery_key)) &&
-    (x.token_secret === undefined || /^[0-9a-f]{64}$/.test(x.token_secret)) &&
-    (x.site_key === undefined || /^[0-9a-f]{64}$/.test(x.site_key)) &&
-    (x.closes_at === undefined || Number.isSafeInteger(x.closes_at)) &&
-    (x.practice === undefined || typeof x.practice === "boolean") &&
-    (x.invite === undefined || /^[0-9a-f]{64}$/.test(x.invite)) &&
-    (x.sealed === undefined || (typeof x.sealed === "string" && x.sealed.length <= 2000)) &&
-    (x.receipt === undefined || (typeof x.receipt === "object" && x.receipt !== null && typeof x.receipt.signature === "string"))
+    x.deposit_address.length <= 600 &&
+    Number.isSafeInteger(x.placed_at) &&
+    optional(x.delivery_key, (v) => hex(v, 64)) &&
+    optional(x.token_secret, (v) => hex(v, 64)) &&
+    optional(x.site_key, (v) => hex(v, 64)) &&
+    optional(x.closes_at, (v) => Number.isSafeInteger(v)) &&
+    optional(x.practice, (v) => typeof v === "boolean") &&
+    optional(x.send, (v) => Number.isSafeInteger(v) && (v as number) > 0) &&
+    optional(x.invite, (v) => hex(v, 64)) &&
+    optional(x.sealed, (v) => typeof v === "string" && v.length <= 2000) &&
+    optional(x.receipt, (v) => typeof v === "object" && v !== null && typeof (v as { signature?: unknown }).signature === "string")
   );
 }
 
@@ -128,8 +143,9 @@ export function loadTickets(auctionId: string): Ticket[] {
 export function saveTicket(ticket: Ticket): Ticket[] {
   const all = loadTickets(ticket.auction_id).filter((t) => t.bid_id !== ticket.bid_id);
   all.push(ticket);
-  // A ticket for a private auction brings its invite along (it matters when the ticket is restored from a file).
-  if (ticket.invite) rememberInvite(ticket.auction_id, ticket.invite);
+  // A ticket for a private auction brings its invite along (it matters when the ticket is restored
+  // from a file). It never replaces an invite this browser already holds: a ticket can come from anyone.
+  if (ticket.invite && !holdsInvite(ticket.auction_id)) rememberInvite(ticket.auction_id, ticket.invite);
   try {
     localStorage.setItem(key(ticket.auction_id), JSON.stringify(all));
   } catch {
@@ -155,8 +171,11 @@ export function allTickets(): Ticket[] {
 
 export const TICKET_HEADER = "DARK VAULT BID TICKET (Zcash testnet). Keep this private until bidding closes.";
 
-export function ticketFile(ticket: Ticket, title: string): string {
-  return [TICKET_HEADER, `Auction: ${title}`, "", JSON.stringify(ticket, null, 1), ""].join("\n");
+export const DEAL_TICKET_HEADER = "DARK VAULT PAYMENT TICKET (Zcash testnet). Keep this private: it is the key to one payment in a private deal.";
+
+/** A ticket as a file. `deal`: the ticket is for a payment in a private deal, not a bid. */
+export function ticketFile(ticket: Ticket, title: string, deal = false): string {
+  return [deal ? DEAL_TICKET_HEADER : TICKET_HEADER, `${deal ? "Deal" : "Auction"}: ${title}`, "", JSON.stringify(ticket, null, 1), ""].join("\n");
 }
 
 export const BACKUP_HEADER = "DARK VAULT TICKET BACKUP (Zcash testnet). Keep this private: it holds every bid this browser has sealed.";

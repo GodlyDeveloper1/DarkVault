@@ -1,45 +1,30 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 // Fonts are bundled with the app: no requests to font CDNs.
 import "@fontsource-variable/space-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import "./globals.css";
-import ChainStatus from "./components/ChainStatus";
-import WalletButton from "./components/WalletButton";
+import Frame from "./components/Frame";
 
 export const metadata: Metadata = {
-  title: { default: "Dark Vault — sealed-bid auctions on shielded Zcash", template: "%s · Dark Vault" },
+  title: { default: "Dark Vault — private markets on shielded Zcash", template: "%s · Dark Vault" },
   description:
-    "A sealed-bid auction house on Zcash. Bids are shielded deposits: nobody watching the chain can see who bid, how much, who won or what was paid.",
+    "Privacy at its peak. Three private markets on Zcash: sealed-bid auctions, sealed batch sales and escrowed deals. Every payment is shielded: nobody watching the chain can see who paid, how much, who won or what was paid.",
   referrer: "no-referrer",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // The script below adds a class to <html> before React starts, so React is told not to mind the difference.
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <header className="top">
-          <div className="shell top-in">
-            <Link href="/" className="brand">
-              <span className="brand-mark" aria-hidden="true" />
-              Dark Vault
-            </Link>
-            <nav>
-              <Link href="/#auctions">Auctions</Link>
-              <Link href="/sell" className="btn primary sm">
-                Sell something
-              </Link>
-              <WalletButton />
-            </nav>
-          </div>
-        </header>
-        {children}
-        <footer className="foot">
-          <div className="shell foot-in">
-            <span>Dark Vault · Zcash testnet · built for the Zecathon by Diaguren Labs</span>
-            <ChainStatus />
-          </div>
-        </footer>
+        {/* Switches the home page's scroll story on before the first paint, unless the visitor has asked for reduced motion. Without it the page is a plain, complete document. It lives here, not in the page, because the layout is only ever drawn by the server. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(!matchMedia('(prefers-reduced-motion: reduce)').matches)document.documentElement.classList.add('dv-motion')}catch(e){}",
+          }}
+        />
+        <Frame>{children}</Frame>
       </body>
     </html>
   );

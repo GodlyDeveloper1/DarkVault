@@ -17,7 +17,7 @@
 import "server-only";
 import { decryptListingWithKey, decryptLot, judgeDigitalDelivery, lotKeyHash, type Fault, type ListingText, type LotHeader } from "vault-core";
 import { LIMITS } from "./limits";
-import { loadLot } from "./store";
+import { lotOf } from "./store";
 import type { Auction, Delivery } from "./types";
 
 const ENVELOPE = /^[A-Za-z0-9+/]{80,}={0,2}$/;
@@ -43,7 +43,10 @@ export function sellerHandover(auction: Auction, now: number, envelope: string |
   if (d.handover) return "already handed over";
   if (d.kind === "digital") {
     if (!envelope) return "the sealed lot key is missing";
-  } else if (!d.shipping) return d.kind === "promise" ? "the winner has not said what they want yet" : "the winner has not sent shipping details yet";
+  } else if (!d.shipping) {
+    const buyer = auction.deal ? "buyer" : "winner";
+    return d.kind === "promise" ? `the ${buyer} has not said what they want yet` : `the ${buyer} has not sent shipping details yet`;
+  }
   if (now > (d.deliver_by ?? 0)) return "the time to hand over has passed";
   d.handover = envelope ? { at: now, envelope } : { at: now };
   d.dispute_by = now + d.dispute_seconds * 1000;
@@ -133,7 +136,7 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
   }
 
   const winner = auction.bids.find((b) => b.id === auction.outcome!.winner_bid_id);
-  const lot = await loadLot(auction.id);
+  const lot = await lotOf(auction);
   if (!winner?.delivery_pub || !d.lot || !lot || !d.handover.envelope) return "this delivery can't be checked";
 
   if (typeof input.lot_key === "string") {
@@ -153,7 +156,8 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
 
   if (typeof input.delivery_key !== "string") return "the delivery key is needed to check a digital lot";
   const verdict = await judgeDigitalDelivery({
-    auctionId: auction.id,
+    // The browsers seal to the sale they know: a unit of a batch sale is delivered under the sale's id.
+    auctionId: auction.unit_of?.parent ?? auction.id,
     envelope: d.handover.envelope,
     deliveryKey: input.delivery_key,
     deliveryPublic: winner.delivery_pub,
@@ -190,7 +194,7 @@ export function operatorResolve(auction: Auction, now: number, decision: unknown
 /** For the operator: the delivered lot, opened with the key the winner handed over. */
 export async function disputedLot(auction: Auction): Promise<{ header: LotHeader; content: Uint8Array } | null> {
   const key = auction.delivery?.dispute?.lot_key;
-  const lot = key ? await loadLot(auction.id) : null;
+  const lot = key ? await lotOf(auction) : null;
   if (!key || !lot) return null;
   try {
     return await decryptLot(unhex(key), lot);

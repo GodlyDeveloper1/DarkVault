@@ -10,11 +10,16 @@
 //
 // An invite is remembered only once it has opened the auction. A link with a
 // wrong key therefore can't replace, or remove, an invite that works.
+//
+// A private deal (the Settlement market) comes in through the same gate and
+// opens into DealRoom. The gate says the same thing for both, at either
+// address, so a locked page doesn't tell a stranger which of the two it is.
 import { useCallback, useEffect, useState } from "react";
 import { inviteFromManage, inviteFromText, isInviteKey } from "vault-core";
 import { headersOf, inviteFor, rememberInvite } from "@/lib/invites";
 import { WALLET_EVENT } from "@/lib/tickets";
 import type { PublicAuction } from "@/lib/views";
+import DealRoom from "@/app/deal/[id]/DealRoom";
 import AuctionRoom from "./AuctionRoom";
 
 type State = { step: "checking" } | { step: "locked"; wrong: boolean } | { step: "open"; auction: PublicAuction; now: number };
@@ -33,6 +38,7 @@ export default function PrivateGate({ id }: { id: string }) {
         try {
           const res = await fetch(`/api/auctions/${id}`, { headers: await headersOf(invite) });
           if (res.status === 404) {
+            void res.body?.cancel(); // an answer nobody reads would otherwise stay open
             refused = true; // not this auction's invite: try the next, and keep whatever is stored
             continue;
           }
@@ -80,21 +86,21 @@ export default function PrivateGate({ id }: { id: string }) {
     return () => window.removeEventListener(WALLET_EVENT, again);
   }, [locked, enter]);
 
-  if (state.step === "open") return <AuctionRoom initial={state.auction} serverNow={state.now} />;
+  if (state.step === "open") return state.auction.deal ? <DealRoom initial={state.auction} serverNow={state.now} /> : <AuctionRoom initial={state.auction} serverNow={state.now} />;
 
   return (
     <div className="card" id="private-gate" style={{ maxWidth: 620, margin: "8vh auto 0" }}>
       <span className="badge private-tag">Private</span>
-      <h1 style={{ fontSize: "clamp(1.6rem, 4vw, 2.4rem)", marginTop: 14 }}>This auction is private</h1>
+      <h1 style={{ fontSize: "clamp(1.6rem, 4vw, 2.4rem)", marginTop: 14 }}>This Page Is Private</h1>
       {state.step === "checking" ? (
         <p className="muted">
-          <span className="spinner" aria-hidden="true" /> Checking your invite…
+          <span className="spinner" aria-hidden="true" /> Checking your link…
         </p>
       ) : (
         <>
           <p className="muted">
-            It is not listed, and what is being sold was encrypted in the seller&apos;s browser, so this site can&apos;t read it either. To see it
-            and bid, open the invite link the seller gave you, or paste it here.
+            It is listed nowhere, and what it is for was encrypted in the seller&apos;s browser, so this site can&apos;t read it either. To open it,
+            use the link the seller gave you, or paste it here.
           </p>
           <form
             onSubmit={(e) => {
@@ -105,20 +111,20 @@ export default function PrivateGate({ id }: { id: string }) {
               void enter([invite]).then((opened) => opened && setPasted(""));
             }}
           >
-            <label htmlFor="invite">Invite link</label>
-            <input id="invite" className="mono" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="https://…/auction/…#invite=…" spellCheck={false} autoComplete="off" />
+            <label htmlFor="invite">Your Link</label>
+            <input id="invite" className="mono" value={pasted} onChange={(e) => setPasted(e.target.value)} placeholder="https://…#invite=…" spellCheck={false} autoComplete="off" />
             {state.wrong && (
               <p className="hint error" id="invite-wrong">
-                That is not an invite to this auction.
+                That link does not open this page.
               </p>
             )}
             <p className="hint">
-              The invite is checked here in your browser. Only a token made from it is shown to the site, never the invite itself. Already bid
-              here from another browser? Restore your ticket file in the wallet panel (top right) and this page opens.
+              The link is checked here in your browser. Only a token made from it is shown to the site, never its key. Been here from another
+              browser? Restore your vault file on the dashboard, or a ticket file in the wallet panel, and this page opens.
             </p>
             <div className="row" style={{ marginTop: 14 }}>
               <button className="primary" disabled={pasted.trim() === ""}>
-                Open the auction
+                Open
               </button>
             </div>
           </form>

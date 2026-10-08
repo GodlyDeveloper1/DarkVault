@@ -50,7 +50,9 @@ const say = (ok: boolean | null, text: string) => {
 };
 
 say(statement.auction_id === id, `The result is for auction ${id}.`);
-console.log(`      ${statement.bids.length} bids on the board, reserve ${formatCoins(statement.reserve)} TAZ, highest bid allowed ${formatCoins(statement.ceiling)} TAZ.`);
+// An auction without a ceiling states the price (or, unsold, the reserve) as the bound of its proof.
+const capped = statement.ceiling !== (statement.sold ? statement.price : statement.reserve);
+console.log(`      ${statement.bids.length} bids on the board, reserve ${formatCoins(statement.reserve)} TAZ${capped ? `, highest bid allowed ${formatCoins(statement.ceiling)} TAZ` : ""}.`);
 
 const verdict = await verifyFairness(statement, proof);
 if (verdict.ok) {

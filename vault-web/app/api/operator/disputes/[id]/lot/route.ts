@@ -4,14 +4,14 @@
 import { disputedLot } from "@/lib/delivery";
 import { bad, noStore, ok } from "@/lib/http";
 import { isOperator } from "@/lib/operator";
-import { loadAuction } from "@/lib/store";
+import { loadRecord } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   if (!isOperator(req)) return bad("not found", 404);
   const { id } = await params;
-  const auction = await loadAuction(id);
+  const auction = await loadRecord(id);
   const lot = auction ? await disputedLot(auction) : null;
   if (!lot) return bad("not found", 404);
   if (lot.header.kind === "text") return ok({ kind: "text", text: new TextDecoder().decode(lot.content) });

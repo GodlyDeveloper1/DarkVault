@@ -20,6 +20,16 @@ export function rememberInvite(auctionId: string, invite: string): void {
   }
 }
 
+/** Does this browser already hold an invite of its own for this auction? (Not one a ticket merely carries.) */
+export function holdsInvite(auctionId: string): boolean {
+  if (held.has(auctionId)) return true;
+  try {
+    return isInviteKey(localStorage.getItem(key(auctionId)));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * This browser's invite to an auction, or null. It may be the one it was
  * given, the one a seller's manage key gives (a seller has no invite link of
