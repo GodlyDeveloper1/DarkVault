@@ -3,7 +3,9 @@
 import "server-only";
 import { newId, sealedFor, sealedHash, signReceipt, validCommitment, validDeliveryPublic, type Receipt } from "vault-core";
 import { LIMITS } from "./limits";
-import { checkAddress, newDepositAddress, SignerError } from "./signer";
+import { moneyByBid } from "./engine";
+import { seatsOf } from "./seats";
+import { checkAddress, newDepositAddress, SignerError, vaultInfo } from "./signer";
 import { siteKey } from "./sitekey";
 import { loadAuction, withAuction } from "./store";
 
@@ -45,12 +47,24 @@ export async function placeBid(id: string, b: NewBid): Promise<Placed> {
     return { error: e instanceof SignerError && e.status === 503 ? e.message : "could not check the refund address; please try again", status: 503 };
   }
 
+  // Which bids are funded decides which seats are taken. Asked before the
+  // lock (the answer is cached for a few seconds); if the signer can't say,
+  // every bid placed counts as seated.
+  const info = current.deal ? null : await vaultInfo(current.vault_id).catch(() => null);
+
   try {
     const result = await withAuction(id, async (auction): Promise<Placed> => {
       if (auction.state !== "open" || Date.now() >= auction.ends_at) return { error: auction.deal ? "this deal has already been taken, or its offer has run out" : "bidding has closed" };
       // A deal is for one buyer. A few acceptances are allowed (a second browser, a lost page), never a crowd.
       if (auction.deal && auction.bids.length >= LIMITS.maxDealAcceptances) return { error: "this deal has been opened for payment too many times; ask the seller to make a new one" };
-      if (auction.bids.length >= LIMITS.maxBidsPerAuction) return { error: "this auction has reached its limit of bids" };
+      if (!auction.deal) {
+        const money = info ? moneyByBid(auction, info) : null;
+        const seats = seatsOf(auction, money ? (bid) => (money.get(bid)?.total ?? 0) > 0 : null);
+        const what = auction.batch ? "this sale" : "this auction";
+        if (seats.closed) return { error: `${what} has taken all the ${auction.batch ? "orders" : "bids"} it can` };
+        if (seats.left === 0)
+          return { error: `${what} is full: all ${seats.seats} seats are taken. A seat comes free when a ${auction.batch ? "order" : "bid"} isn't funded within ${Math.ceil(LIMITS.seatHoldSec / 60)} minute${Math.ceil(LIMITS.seatHoldSec / 60) === 1 ? "" : "s"}` };
+      }
       if (auction.bids.some((x) => x.commitment === b.commitment)) return { error: "this commitment has already been placed" };
       const deposit_address = await newDepositAddress(auction.vault_id);
       const placed_at = Date.now();

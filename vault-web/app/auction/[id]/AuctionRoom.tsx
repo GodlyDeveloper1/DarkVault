@@ -49,8 +49,9 @@ import {
   type Receipt,
 } from "vault-core";
 import Countdown from "@/app/components/Countdown";
+import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
-import { stateLabel } from "@/app/components/AuctionTile";
+import { SeatsFull, seatsLeft, SeatsStat, stateLabel } from "@/app/components/AuctionTile";
 import { loadTickets, mayOpenByHand, parseTicketFile, saveTicket, ticketFile, tokenOf, WALLET_EVENT, type Ticket } from "@/lib/tickets";
 import { inviteFor, inviteHeaders, shareLink } from "@/lib/invites";
 import { sellerKeyFor } from "@/lib/sellerKey";
@@ -331,6 +332,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               {description}
             </p>
           )}
+          <PhotoGallery auctionId={auction.id} count={auction.photos ?? 0} sealed={isPrivate} title={title} />
           {listing === "locked" && (
             <p className="error small" id="listing-locked">
               This browser&apos;s invite could not open the listing. Open the invite link the seller gave you again.
@@ -463,6 +465,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               <b id="stat-funded">{auction.funded ?? "–"}</b>
               <span>funded</span>
             </div>
+            <SeatsStat auction={auction} />
             <div>
               <b>{formatCoins(auction.reserve)}</b>
               <span>reserve (TAZ)</span>
@@ -964,6 +967,10 @@ function BidForm({ auction, onPlaced, hasBids }: { auction: PublicAuction; onPla
     }
   }
 
+  // Every seat is taken: nobody can bid any more.
+  const seats = seatsLeft(auction);
+  if (seats && seats.left === 0) return <SeatsFull auction={auction} what="bids" />;
+
   // After a first bid, keep the form out of the way until it is asked for.
   if (hasBids && !open) {
     return (
@@ -1278,6 +1285,12 @@ function MyBid({
               <strong>Now fund it.</strong> Send <strong>at least {formatCoins(needed)} TAZ</strong>
               {bond > 0 && <> (your bid plus the {formatCoins(bond)} TAZ bond)</>} from a shielded balance to the
               address below, with no memo. It was made for this bid alone.
+            </p>
+          )}
+          {auction.seats && auction.state === "open" && (
+            <p className="hint seat-hold" id="seat-hold">
+              Fund it within {auction.seats.hold_minutes} minutes to keep your seat. After that the seat goes back to the room, but a deposit
+              that arrives before bidding closes still counts.
             </p>
           )}
           <div className="row" style={{ alignItems: "flex-start" }}>

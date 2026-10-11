@@ -3,8 +3,9 @@
 // vaults in memory, and has a pretend chain that mines a block every few seconds.
 //
 // It enforces the same settlement rules as the real signer (exact sums, every
-// deposit confirmed, one settlement at a time), so the web app's plans are
-// checked the same way. It builds no transactions.
+// deposit confirmed, one settlement at a time, at most 24 notes per payout with
+// merges of 20 before that), so the web app's plans are checked the same way.
+// It builds no transactions.
 //
 //   node scripts/mock-signer.mjs
 //
@@ -19,6 +20,7 @@
 //   POST /__deposit {address, zatoshis}   pretend someone paid a deposit address
 //   GET  /__log                           everything this stand-in has been sent
 //   GET  /__vaults                        every vault and what it holds
+//   GET  /__merges                        every merge made (a vault holding more notes than one payout spends)
 //   POST /__lose-reply {n}                the next n payouts happen, but their answers are lost
 //                                         (as when a connection drops): for testing recovery
 import http from "node:http";
@@ -32,8 +34,12 @@ let height = 5_000_000;
 setInterval(() => (height += 1), BLOCK_MS).unref();
 
 let loseReplies = 0;
-const vaults = new Map(); // id -> { birthday, addresses: Set, deposits: [], settlements: [] }
+const vaults = new Map(); // id -> { birthday, addresses: Set, deposits: [], settlements: [], merges: [] }
+// Like the real signer: a payout spends at most this many notes; a vault holding more is merged first, this many at a time.
+const MAX_PAYOUT_INPUTS = Number(process.env.MOCK_MAX_PAYOUT_INPUTS ?? 24);
+const MERGE_BATCH = Number(process.env.MOCK_MERGE_BATCH ?? 20);
 const log = [];
+const mergeLog = []; // every merge made, for tests (GET /__merges)
 const hex = (bytes) => [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
 
 function readBody(req) {
@@ -53,27 +59,37 @@ const confirmations = (d) => (d.mined_height <= height ? height - d.mined_height
 const DUST = 5000;
 const spendableNotes = (v) => v.deposits.filter((d) => d.mined_height <= height && !d.spent && d.value > DUST);
 
+// Merge fees the next settlement owes, and whether a merge is waiting for a block.
+const mergeFees = (v) => v.merges.reduce((s, m) => s + m.fee, 0);
+const merging = (v) => v.merges.some((m) => status(m) === "pending");
+
 function info(id, v) {
   const mined = v.deposits.filter((d) => d.mined_height <= height);
   const unspent = spendableNotes(v);
   const settlements = v.settlements.map((s) => ({ txid: s.txid, status: status(s), mined_height: status(s) === "mined" ? s.mined_height : null, fee_zatoshis: s.fee, payments: s.payments }));
+  // The merge's new note is not in a block yet while it waits, so spendable stays below total.
+  const owed = mergeFees(v);
   return {
     vault_id: id,
     birthday_height: v.birthday,
     chain_tip: height,
     scanned_height: height,
     min_confirmations: MIN_CONF,
-    balance_total_zatoshis: unspent.reduce((s, d) => s + d.value, 0),
-    balance_spendable_zatoshis: unspent.filter((d) => confirmations(d) >= MIN_CONF).reduce((s, d) => s + d.value, 0),
+    balance_total_zatoshis: unspent.reduce((s, d) => s + d.value, 0) + v.deposits.filter((d) => d.merged && d.mined_height > height).reduce((s, d) => s + d.value, 0) + owed,
+    balance_spendable_zatoshis: unspent.filter((d) => confirmations(d) >= MIN_CONF).reduce((s, d) => s + d.value, 0) + owed,
+    merge_fees_zatoshis: owed,
+    merging: merging(v),
     deposits: mined.filter((d) => !d.internal).map((d) => ({ txid: d.txid, mined_height: d.mined_height, confirmations: confirmations(d), pool: "ironwood", value_zatoshis: d.value, to_address: d.address })),
     settlement: settlements[settlements.length - 1] ?? null,
     settlements,
   };
 }
 
-function settle(v, payments) {
+function settle(v, payments, prepaid = 0) {
   const last = v.settlements[v.settlements.length - 1];
   if (last && status(last) === "pending") return [400, "this vault has a settlement waiting to be mined; it can't settle again yet"];
+  if (merging(v)) return [400, "this vault is merging its payments; it can settle once that merge is in a block"];
+  if (!Number.isSafeInteger(prepaid) || prepaid < 0) return [400, "bad prepaid fee"];
   if (!Array.isArray(payments) || payments.length === 0) return [400, "a settlement needs at least one payment"];
   for (const [i, p] of payments.entries()) {
     if (typeof p.to !== "string" || !p.to.startsWith("utest1")) return [400, `payment ${i}: please use a shielded unified address`];
@@ -81,22 +97,46 @@ function settle(v, payments) {
   }
   const unspent = spendableNotes(v);
   const total = unspent.reduce((s, d) => s + d.value, 0);
-  const asked = payments.reduce((s, p) => s + p.zatoshis, 0);
-  if (asked !== total) return [400, `the payments add up to ${asked} zat but the vault holds ${total} zat; a settlement must pay out exactly what was deposited`];
+  const owed = mergeFees(v);
+  const asked = payments.reduce((s, p) => s + p.zatoshis, 0) + prepaid;
+  if (asked !== total + owed) return [400, `the payments add up to ${asked} zat but the vault holds ${total + owed} zat; a settlement must pay out exactly what was deposited`];
   if (unspent.some((d) => confirmations(d) < MIN_CONF)) return [400, "not every deposit is confirmed enough to spend"];
+
+  // Too many notes for one payout: merge a batch (the smallest, and the largest so the new note is worth more than the fee).
+  if (unspent.length > MAX_PAYOUT_INPUTS) {
+    const sorted = [...unspent].sort((a, b) => a.value - b.value);
+    const take = Math.min(MERGE_BATCH, sorted.length);
+    const batch = [...sorted.slice(0, take - 1), sorted[sorted.length - 1]];
+    const fee = 5000 * Math.max(2, batch.length);
+    const m = { txid: hex(32), fee, mined_height: height + 1, notes: batch.length };
+    for (const d of batch) d.spent = true;
+    v.deposits.push({ txid: m.txid, address: null, value: batch.reduce((s, d) => s + d.value, 0) - fee, mined_height: m.mined_height, spent: false, internal: true, merged: true });
+    v.merges.push(m);
+    mergeLog.push(m);
+    return [400, `this vault holds ${unspent.length} payments, more than one payout spends; merged ${batch.length} of them in ${m.txid} (fee ${fee} zat). Settle again once that is in a block`];
+  }
 
   // 5000 zat per action, at least two, plus one action of padding, as seen on testnet.
   const fee = 5000 * (Math.max(2, unspent.length, payments.length) + 1);
   const payers = payments.map((p, i) => (p.pays_fee ? i : -1)).filter((i) => i >= 0);
   if (payers.length === 0) return [400, "no payment is marked to pay the network fee"];
-  const share = Math.floor(fee / payers.length);
+  // The merges' fees come out of the same payments; what the web app set aside for fees is taken off first.
+  const shared = fee + owed - prepaid;
   const amounts = payments.map((p) => p.zatoshis);
-  payers.forEach((i, n) => (amounts[i] -= share + (n === 0 ? fee % payers.length : 0)));
+  if (shared >= 0) {
+    const share = Math.floor(shared / payers.length);
+    payers.forEach((i, n) => (amounts[i] -= share + (n === 0 ? shared % payers.length : 0)));
+  } else {
+    const back = -shared;
+    const share = Math.floor(back / payers.length);
+    payers.forEach((i, n) => (amounts[i] += share + (n === 0 ? back % payers.length : 0)));
+  }
   if (amounts.some((a) => a <= 0)) return [400, "a payment is too small to pay its share of the network fee"];
 
   for (const d of unspent) d.spent = true;
-  const s = { txid: hex(32), fee, mined_height: height + 1, payments: payments.map((p, i) => ({ to: p.to, zatoshis: amounts[i] })) };
+  const s = { txid: hex(32), fee: fee + owed, mined_height: height + 1, payments: payments.map((p, i) => ({ to: p.to, zatoshis: amounts[i] })) };
   v.settlements.push(s);
+  v.merges = [];
   // A payment to an address of another vault here (an auction's escrow vault)
   // arrives there when the transaction is mined. Like the real signer, the
   // receiving vault counts it in its balance but does not list it as a deposit
@@ -112,7 +152,7 @@ function settle(v, payments) {
     // An address of another wallet (a peer stand-in): it arrives there as a deposit from outside.
     if (!here) for (const peer of PEERS) fetch(`${peer}/__deposit`, { method: "POST", body: JSON.stringify({ address: p.to, zatoshis: p.zatoshis }) }).catch(() => {});
   }
-  return [200, { txid: s.txid, status: "pending", mined_height: null, fee_zatoshis: fee, payments: s.payments }];
+  return [200, { txid: s.txid, status: "pending", mined_height: null, fee_zatoshis: s.fee, payments: s.payments }];
 }
 
 http
@@ -127,8 +167,9 @@ http
     };
     const { method, url: path } = req;
     if (method === "GET" && path === "/__log") return json(200, log);
+    if (method === "GET" && path === "/__merges") return json(200, mergeLog);
     if (method === "GET" && path === "/__vaults")
-      return json(200, [...vaults].map(([id, v]) => ({ id, held: v.deposits.filter((d) => !d.spent).reduce((n, d) => n + d.value, 0) })));
+      return json(200, [...vaults].map(([id, v]) => ({ id, held: v.deposits.filter((d) => !d.spent).reduce((n, d) => n + d.value, 0), notes: v.deposits.filter((d) => !d.spent && d.value > DUST).length, merges: v.merges.length })));
     if (method === "GET" && path === "/health") return text(200, "ok");
 
     const raw = method === "POST" ? await readBody(req) : "";
@@ -149,7 +190,7 @@ http
 
     if (method === "POST" && path === "/vaults") {
       const id = hex(8);
-      vaults.set(id, { birthday: height, addresses: new Set(), deposits: [], settlements: [] });
+      vaults.set(id, { birthday: height, addresses: new Set(), deposits: [], settlements: [], merges: [] });
       return json(200, { vault_id: id, birthday_height: height });
     }
 
@@ -180,7 +221,7 @@ http
         return json(200, { address });
       }
       if (method === "POST" && m[2] === "/settle") {
-        const [code, value] = settle(v, body.payments);
+        const [code, value] = settle(v, body.payments, body.prepaid_fee_zatoshis ?? 0);
         if (code === 200 && loseReplies > 0) {
           loseReplies -= 1;
           return text(500, "the payout was made, but this answer is a pretend failure (test)");

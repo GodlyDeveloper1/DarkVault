@@ -233,6 +233,32 @@ export function applyVault(bundle: VaultBundle): Counts {
 }
 
 /** "2 bids, 1 listing and a practice wallet". */
+/**
+ * Removes everything Dark Vault keeps in this browser: bids, seller keys,
+ * invites, the saved refund address and the practice wallet (every key that
+ * starts with "dv-", in local and session storage). Money is never kept
+ * here, so nothing that was paid is touched: refunds and payouts still go to
+ * the addresses given. Returns what was there.
+ */
+export function clearAll(): Counts {
+  const before = countsOf(collect());
+  for (const pick of [() => localStorage, () => sessionStorage]) {
+    try {
+      const store = pick();
+      const mine: string[] = [];
+      for (let i = 0; i < store.length; i++) {
+        const k = store.key(i);
+        if (k?.startsWith("dv-")) mine.push(k);
+      }
+      for (const k of mine) store.removeItem(k);
+    } catch {
+      /* no storage */
+    }
+  }
+  announce();
+  return before;
+}
+
 export function describe(c: Counts): string {
   const parts = [
     c.bids ? `${c.bids} ${c.bids === 1 ? "bid" : "bids"}` : "",

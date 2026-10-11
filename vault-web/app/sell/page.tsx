@@ -21,6 +21,7 @@ import {
   bondFor,
   encryptListing,
   encryptLot,
+  encryptPhoto,
   formatCoins,
   inviteAccess,
   inviteFromManage,
@@ -32,8 +33,10 @@ import {
   sha256Hex,
   toBase64,
 } from "vault-core";
+import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
 import { rememberInvite, shareLink } from "@/lib/invites";
+import type { PickedPhoto } from "@/lib/photoClient";
 
 const DURATIONS: [string, number][] = [
   ["15 minutes", 15 * 60],
@@ -78,6 +81,7 @@ export default function Sell() {
   }, []);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
   const [reserve, setReserve] = useState("0.01");
   const [duration, setDuration] = useState(3600);
   const [reveal, setReveal] = useState(15 * 60);
@@ -142,11 +146,16 @@ export default function Sell() {
       const listing = invite
         ? { private: { listing: await encryptListing(invite, { title: title.trim(), description: description.trim() }), access_hash: await sha256Hex(await inviteAccess(invite)) } }
         : { title: title.trim(), description: description.trim() };
+      // Photos were redrawn when picked. A private auction's are encrypted here, each padded to the same size.
+      const photoData = invite
+        ? await Promise.all(photos.map(async (p, i) => toBase64(await encryptPhoto(invite, i, p.bytes))))
+        : photos.map((p) => toBase64(p.bytes));
       const res = await fetch("/api/auctions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...listing,
+          ...(photoData.length ? { photos: photoData } : {}),
           reserve: reserveZat,
           duration_seconds: duration,
           reveal_seconds: reveal,
@@ -268,6 +277,8 @@ export default function Sell() {
 
           <label htmlFor="description">Description</label>
           <textarea id="description" value={description} maxLength={1200} onChange={(e) => setDescription(e.target.value)} placeholder="Condition, what exactly the winner gets, anything a bidder should know." />
+
+          <PhotoPicker photos={photos} onChange={setPhotos} sealed={visibility === "private"} />
 
           <label style={{ marginBottom: 8 }}>Who can see this auction?</label>
           <div className="seg two" role="radiogroup" aria-label="Who can see this auction">

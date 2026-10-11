@@ -22,6 +22,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { bidToken, commit, decryptListing, deliveryPublic, formatCoins, manageToken, newDeliveryKey, newId, newNonce, sha256Hex, type ListingText } from "vault-core";
 import Countdown from "@/app/components/Countdown";
+import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
 import { SellerDelivery, WinnerDelivery } from "@/app/auction/[id]/Delivery";
 import { headersOf, inviteFor, inviteHeaders } from "@/lib/invites";
@@ -227,6 +228,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
               {description}
             </p>
           )}
+          <PhotoGallery auctionId={deal.id} count={deal.photos ?? 0} sealed title={title} />
           {terms === "locked" && (
             <p className="error small" id="terms-locked">
               This browser&apos;s link could not open the terms. Open the link you were given again.

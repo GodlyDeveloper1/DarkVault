@@ -88,6 +88,8 @@ export interface BidMoney {
   confirmations: number;
   /** Height of this bid's first deposit, for breaking ties. */
   first_height: number | null;
+  /** How many separate payments make up `total`. */
+  notes: number;
 }
 
 /** Matches each deposit in the vault to its bid, by the address it arrived at. */
@@ -97,8 +99,9 @@ export function moneyByBid(auction: Auction, info: VaultInfo): Map<string, BidMo
   for (const d of info.deposits) {
     const bidId = d.to_address ? byAddress.get(d.to_address) : undefined;
     if (!bidId) continue;
-    const m = out.get(bidId) ?? { total: 0, counted: 0, confirmations: Infinity, first_height: null };
+    const m = out.get(bidId) ?? { total: 0, counted: 0, confirmations: Infinity, first_height: null, notes: 0 };
     m.total += d.value_zatoshis;
+    m.notes += 1;
     const closed = auction.closed?.height;
     if (d.mined_height !== null && (closed === undefined || d.mined_height <= closed)) m.counted += d.value_zatoshis;
     m.confirmations = Math.min(m.confirmations, d.confirmations);
@@ -107,6 +110,36 @@ export function moneyByBid(auction: Auction, info: VaultInfo): Map<string, BidMo
   }
   for (const m of out.values()) if (!Number.isFinite(m.confirmations)) m.confirmations = 0;
   return out;
+}
+
+/**
+ * What one more note costs a payout in network fees (ZIP 317 charges 5,000
+ * zat per action). A vault holding more notes than one payout spends is merged
+ * first (see the signer), which costs about the same per note.
+ */
+export const NOTE_FEE = 5_000;
+
+/**
+ * Every payment a bidder sends beyond the first is one more note for the
+ * payout to spend. Its fee comes out of what goes back to that bidder, not out
+ * of everyone's share: whoever sends a hundred tiny payments pays to have them
+ * spent, and the seller and the other bidders pay the usual fee. What is taken
+ * is handed to the signer as the prepaid part of the fee. A payment keeps at
+ * least what a share of the rest of the fee needs. Returns the total taken.
+ */
+export function chargeExtraNotes(payments: PlannedPayment[], money: Map<string, BidMoney>): number {
+  let prepaid = 0;
+  const charged = new Set<string>();
+  for (const p of payments) {
+    if (!p.bidId || (p.kind !== "refund" && p.kind !== "winner-change") || charged.has(p.bidId)) continue;
+    const extra = (money.get(p.bidId)?.notes ?? 0) - 1;
+    if (extra <= 0) continue;
+    const take = Math.min(extra * NOTE_FEE, Math.max(0, p.zatoshis - FEE_SHARE_FLOOR));
+    p.zatoshis -= take;
+    prepaid += take;
+    charged.add(p.bidId);
+  }
+  return prepaid;
 }
 
 /**
@@ -440,6 +473,7 @@ async function settle(auction: Auction, now: number): Promise<void> {
   // saved: adopt the settlement that exists rather than trying to pay twice.
   if (info.settlement && info.settlement.status !== "expired" && auction.settlements.length === 0) {
     const payments = plan(auction.id, auction.seller.payout_address, depositors, toOutcome(auction), escrowFor(auction), bondFor(auction));
+    chargeExtraNotes(payments, money);
     auction.settlements.push({ txid: info.settlement.txid, fee: info.settlement.fee_zatoshis, at: now, payments: record(payments, info.settlement.payments) });
     auction.deposits_settled = Object.fromEntries(depositors.map((d) => [d.id, d.deposit]));
     afterFirstPayout(auction, now);
@@ -460,9 +494,11 @@ async function settle(auction: Auction, now: number): Promise<void> {
   if (info.balance_spendable_zatoshis !== info.balance_total_zatoshis) return; // still confirming
 
   const payments = plan(auction.id, auction.seller.payout_address, depositors, toOutcome(auction), escrowFor(auction), bondFor(auction));
+  const prepaid = chargeExtraNotes(payments, money);
   const result = await settleVault(
     auction.vault_id,
     payments.map((p) => ({ to: p.to, zatoshis: p.zatoshis, memo: p.memo, pays_fee: p.pays_fee })),
+    prepaid,
   );
   auction.settlements.push({ txid: result.txid, fee: result.fee_zatoshis, at: now, payments: record(payments, result.payments) });
   auction.deposits_settled = Object.fromEntries(depositors.map((d) => [d.id, d.deposit]));
@@ -587,7 +623,13 @@ async function settleBatch(sale: Auction, now: number): Promise<void> {
   const units = await ensureUnits(sale, now);
   const outcome: BatchOutcome = { sold: winners.length > 0, winners: winners.map((w) => ({ id: w.bid_id, price: w.price })), standing: sale.outcome!.standing };
   const escrowOf = Object.fromEntries(winners.map((w, k) => [w.bid_id, units[k]!.delivery!.escrow_address]));
-  const planNow = () => planBatch(sale.id, depositors, outcome, escrowOf, bond);
+  // A buyer's extra payments carry their own fee (see chargeExtraNotes).
+  let prepaid = 0;
+  const planNow = () => {
+    const payments = planBatch(sale.id, depositors, outcome, escrowOf, bond);
+    prepaid = chargeExtraNotes(payments, money);
+    return payments;
+  };
   // An escrow payment is not something its bidder is shown as a payment of theirs: it is recorded without the bid.
   const recordOf = (payments: PlannedPayment[], paid: { zatoshis: number }[]) => record(payments, paid).map((p) => (p.kind === "escrow" ? { kind: p.kind, owed: p.owed, paid: p.paid } : p));
   /**
@@ -642,6 +684,7 @@ async function settleBatch(sale: Auction, now: number): Promise<void> {
   const result = await settleVault(
     sale.vault_id,
     payments.map((p) => ({ to: p.to, zatoshis: p.zatoshis, memo: p.memo, pays_fee: p.pays_fee })),
+    prepaid,
   );
   await startUnits(result.payments);
   sale.settlements.push({ txid: result.txid, fee: result.fee_zatoshis, at: now, payments: recordOf(payments, result.payments) });

@@ -137,6 +137,28 @@ export async function loadLot(id: string): Promise<Uint8Array | null> {
   }
 }
 
+// --- listing photos: <data>/photos/<auction id>.<n>.bin ----------------------
+
+const PHOTOS = path.join(DATA_DIR, "photos");
+const photoFile = (id: string, index: number) => {
+  if (!ID.test(id) || !Number.isInteger(index) || index < 0 || index > 9) throw new Error("bad photo");
+  return path.join(PHOTOS, `${id}.${index}.bin`);
+};
+
+export async function savePhoto(id: string, index: number, bytes: Uint8Array): Promise<void> {
+  await fs.mkdir(PHOTOS, { recursive: true });
+  await fs.writeFile(photoFile(id, index), bytes, { flag: "wx" }); // never overwritten
+}
+
+export async function loadPhoto(id: string, index: number): Promise<Uint8Array | null> {
+  try {
+    return new Uint8Array(await fs.readFile(photoFile(id, index)));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+}
+
 // Order Flow: each unit of a batch sale has its own encrypted lot, <data>/lots/<sale id>.u<n>.bin
 
 const unitLotFile = (id: string, index: number) => {

@@ -27,7 +27,9 @@ import {
   toBase64,
   unitLotKey,
 } from "vault-core";
+import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
+import type { PickedPhoto } from "@/lib/photoClient";
 import { addressProblem } from "@/lib/wallet";
 
 const DURATIONS: [string, number][] = [
@@ -57,6 +59,7 @@ const MAX_UNIT_BYTES = 60 * 1024;
 export default function NewSale() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
   const [lines, setLines] = useState("");
   const [price, setPrice] = useState("0.01");
   const [deliverIn, setDeliverIn] = useState(86400);
@@ -129,6 +132,7 @@ export default function NewSale() {
         body: JSON.stringify({
           title: title.trim(),
           description: description.trim(),
+          ...(photos.length ? { photos: photos.map((p) => toBase64(p.bytes)) } : {}),
           reserve: priceZat,
           duration_seconds: duration,
           reveal_seconds: reveal,
@@ -244,6 +248,8 @@ export default function NewSale() {
 
           <label htmlFor="description">Description</label>
           <textarea id="description" value={description} maxLength={1200} onChange={(e) => setDescription(e.target.value)} placeholder="What one unit is, and anything a buyer should know. Every unit must match this." />
+
+          <PhotoPicker photos={photos} onChange={setPhotos} sealed={false} />
 
           <label htmlFor="units">The Units, One Per Line</label>
           <textarea

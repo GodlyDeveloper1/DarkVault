@@ -26,7 +26,12 @@ use std::{
 
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
-use rand::rngs::OsRng;
+use rand::{rand_core::UnwrapErr, rngs::SysRng};
+/// The operating system's random numbers, as the wallet database and the transaction builder take them.
+type OsRng = UnwrapErr<SysRng>;
+fn os_rng() -> OsRng {
+    UnwrapErr(SysRng)
+}
 use secrecy::SecretVec;
 use tokio::sync::{mpsc, oneshot};
 use tonic::{
@@ -44,17 +49,18 @@ use zcash_client_backend::{
             input_selection::{
                 GreedyInputSelector, GreedyInputSelectorError, SpendPolicy,
             },
-            propose_transfer, ConfirmationsPolicy, SpendingKeys,
+            propose_send_max_transfer, propose_transfer, ConfirmationsPolicy, SpendingKeys,
         },
-        Account, AccountBalance, AccountBirthday, TransactionDataRequest,
-        TransactionStatus, WalletRead, WalletWrite,
+        locking::{LockFilter, LockOwner, LockedInputPolicy},
+        Account, AccountBalance, AccountBirthday, InputSource, MaxSpendMode, OutputLockStore,
+        TransactionDataRequest, TransactionStatus, WalletRead, WalletWrite,
     },
     fees::{standard::MultiOutputChangeStrategy, DustOutputPolicy, SplitPolicy, StandardFeeRule},
     proto::{
         compact_formats::CompactBlock,
         service::{self, compact_tx_streamer_client::CompactTxStreamerClient, RawTransaction},
     },
-    wallet::OvkPolicy,
+    wallet::{OutputRef, OvkPolicy},
 };
 use zcash_client_sqlite::{
     error::SqliteClientError, util::SystemClock, wallet::commitment_tree,
@@ -76,6 +82,33 @@ use zip321::{Payment, TransactionRequest};
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(30);
 const BATCH_SIZE: u32 = 1_000;
+
+/// The most payments (notes) one payout may spend. Twenty seats, a seller's
+/// bond and a few top-ups fit. Keeping the inputs bounded keeps the fee search
+/// and the proving time of a payout bounded too, whatever anyone sends in. A
+/// vault holding more first merges them, a batch at a time (see `merge_step`),
+/// so nobody can jam a vault by sending it a pile of small payments. (Outputs
+/// grow with the bids that are paid back: the web app takes at most 120 bids
+/// in an auction, and `main.rs` refuses a payout of more than 200 payments.)
+const MAX_PAYOUT_INPUTS: usize = 24;
+/// How many notes one merge spends.
+const MERGE_BATCH: usize = 20;
+/// The limits in force: `VAULT_MAX_PAYOUT_INPUTS` can lower the payout limit
+/// (3 to 24, never higher), so that a merge can be seen on testnet with a
+/// handful of payments. A merge spends at most `MERGE_BATCH` notes, and always
+/// fewer than the payout limit, so that each one brings the vault closer to it.
+fn payout_limits() -> (usize, usize) {
+    limits_from(std::env::var("VAULT_MAX_PAYOUT_INPUTS").ok().as_deref())
+}
+fn limits_from(setting: Option<&str>) -> (usize, usize) {
+    let inputs = setting
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .map(|n| n.clamp(3, MAX_PAYOUT_INPUTS))
+        .unwrap_or(MAX_PAYOUT_INPUTS);
+    (inputs, MERGE_BATCH.min(inputs - 1))
+}
+/// Marks the short-lived locks a merge puts on the notes it leaves alone.
+const MERGE_LOCK_OWNER: LockOwner = LockOwner::new(*b"dark-vault/merge: notes left out");
 
 type Db = WalletDb<rusqlite::Connection, TestNetwork, SystemClock, OsRng>;
 
@@ -262,8 +295,15 @@ pub struct VaultInfo {
     pub chain_tip: u32,
     pub scanned_height: u32,
     pub min_confirmations: u32,
+    /// What the vault holds. Network fees already spent on merging its notes
+    /// are counted in, because the next settlement pays them out of the
+    /// payments: to the web app a vault holds exactly what was deposited.
     pub balance_total_zatoshis: u64,
     pub balance_spendable_zatoshis: u64,
+    /// Fees spent on merges that the next settlement still owes (see above).
+    pub merge_fees_zatoshis: u64,
+    /// A merge is waiting to be mined; the vault can't settle until it is.
+    pub merging: bool,
     pub deposits: Vec<Deposit>,
     /// The most recent settlement, if any.
     pub settlement: Option<Settlement>,
@@ -287,6 +327,8 @@ pub enum Command {
     Settle {
         vault_id: String,
         payments: Vec<SettlePayment>,
+        /// Part of the vault set aside for network fees by the web app (see `settle`).
+        prepaid_fee_zatoshis: u64,
         reply: oneshot::Sender<anyhow::Result<Settlement>>,
     },
 }
@@ -300,6 +342,10 @@ struct VaultRecord {
     /// Oldest first. Usually one; see `VaultInfo::settlements`.
     #[serde(default)]
     settlements: Vec<SettlementRecord>,
+    /// Merges made since the last settlement, oldest first. Their fees are
+    /// owed by the next settlement, which clears this list.
+    #[serde(default)]
+    merges: Vec<MergeRecord>,
     /// Read from files written before `settlements` existed.
     #[serde(default, skip_serializing)]
     settlement: Option<SettlementRecord>,
@@ -310,6 +356,18 @@ struct SettlementRecord {
     txid: String,
     fee_zatoshis: u64,
     payments: Vec<PaidOut>,
+    /// What the merges before this settlement cost in network fees.
+    #[serde(default)]
+    merge_fees_zatoshis: u64,
+}
+
+/// One merge: a transaction from a vault to itself that turns many notes into
+/// one. No money leaves the vault except the network fee.
+#[derive(Serialize, Deserialize, Clone)]
+struct MergeRecord {
+    txid: String,
+    fee_zatoshis: u64,
+    notes: usize,
 }
 
 /// Starts the worker on its own thread and returns the queue for commands.
@@ -359,11 +417,11 @@ pub fn spawn(config: SyncConfig, status: Arc<SyncStatus>) -> mpsc::UnboundedSend
                             Some(Command::VaultInfo { vault_id, reply }) => {
                                 let _ = reply.send(vault_info(&config, &status, &vault_id));
                             }
-                            Some(Command::Settle { vault_id, payments, reply }) => {
+                            Some(Command::Settle { vault_id, payments, prepaid_fee_zatoshis, reply }) => {
                                 // Build against the real chain tip, so the transaction's
                                 // expiry height is not already in the past.
                                 run_sync(&config, &cache, &status).await;
-                                let result = settle(&config, &vault_id, &payments).await;
+                                let result = settle(&config, &vault_id, &payments, prepaid_fee_zatoshis).await;
                                 if let Err(e) = &result {
                                     eprintln!("settle vault {vault_id} error: {e:#}");
                                 }
@@ -425,7 +483,7 @@ async fn connect(server: &str) -> anyhow::Result<CompactTxStreamerClient<Channel
 }
 
 fn open_db(config: &SyncConfig) -> anyhow::Result<Db> {
-    let mut db = WalletDb::for_path(&config.db_path, TestNetwork, SystemClock, OsRng)?;
+    let mut db = WalletDb::for_path(&config.db_path, TestNetwork, SystemClock, os_rng())?;
     init_wallet_db(&mut db, None).map_err(|e| anyhow!("init wallet db: {e:?}"))?;
     Ok(db)
 }
@@ -775,7 +833,7 @@ async fn create_vault(config: &SyncConfig) -> anyhow::Result<NewVault> {
     let mut vaults = load_vaults(config);
     vaults.insert(
         vault_id.clone(),
-        VaultRecord { account_index, birthday_height, settlements: vec![], settlement: None },
+        VaultRecord { account_index, birthday_height, settlements: vec![], merges: vec![], settlement: None },
     );
     save_vaults(config, &vaults)?;
     println!("vault {vault_id} opened (account {account_index}, birthday {birthday_height})");
@@ -875,11 +933,37 @@ fn settlements_of(config: &SyncConfig, record: &VaultRecord) -> anyhow::Result<V
                 txid: s.txid.clone(),
                 status,
                 mined_height,
-                fee_zatoshis: s.fee_zatoshis,
+                fee_zatoshis: s.fee_zatoshis + s.merge_fees_zatoshis,
                 payments: s.payments.clone(),
             })
         })
         .collect()
+}
+
+/// The merge fees the next settlement owes: those of the merges since the
+/// last settlement (pending or mined ones; an expired merge never happened and
+/// its notes are back), plus, if the last settlement expired without being
+/// mined, the merge fees it was carrying (those merges did happen). Also the
+/// merges that count, and whether one is still waiting to be mined.
+fn open_merges(config: &SyncConfig, record: &VaultRecord) -> anyhow::Result<(Vec<MergeRecord>, u64, bool)> {
+    let mut kept = Vec::new();
+    let mut fees = 0u64;
+    let mut pending = false;
+    if let Some(last) = record.settlements.last() {
+        if last.merge_fees_zatoshis > 0 && transaction_status(config, &last.txid)?.0 == "expired" {
+            fees += last.merge_fees_zatoshis;
+        }
+    }
+    for m in &record.merges {
+        let (status, _) = transaction_status(config, &m.txid)?;
+        if status == "expired" {
+            continue;
+        }
+        pending |= status == "pending";
+        fees += m.fee_zatoshis;
+        kept.push(m.clone());
+    }
+    Ok((kept, fees, pending))
 }
 
 fn vault_info(config: &SyncConfig, status: &SyncStatus, vault_id: &str) -> anyhow::Result<VaultInfo> {
@@ -897,14 +981,19 @@ fn vault_info(config: &SyncConfig, status: &SyncStatus, vault_id: &str) -> anyho
         .unwrap_or((0, 0));
     let scanned = status.scanned_height.load(Ordering::Relaxed);
     let mut settlements = settlements_of(config, &record)?;
+    let (_, merge_fees, merging) = open_merges(config, &record)?;
     Ok(VaultInfo {
         vault_id: vault_id.to_string(),
         birthday_height: record.birthday_height,
         chain_tip: status.chain_tip.load(Ordering::Relaxed),
         scanned_height: scanned,
         min_confirmations: min_confirmations(config),
-        balance_total_zatoshis: total,
-        balance_spendable_zatoshis: spendable,
+        // While a merge waits for a block its new note is not spendable yet,
+        // so spendable stays below total and the web app waits.
+        balance_total_zatoshis: total + merge_fees,
+        balance_spendable_zatoshis: spendable + merge_fees,
+        merge_fees_zatoshis: merge_fees,
+        merging,
         deposits: read_deposits(config, account, scanned)?,
         settlement: settlements.last().map(|s| Settlement {
             txid: s.txid.clone(),
@@ -943,20 +1032,34 @@ const ALL_POOLS: [zcash_protocol::PoolType; 4] = [
 
 /// Splits the fee equally across the payments that pay it; the first of them
 /// takes any remainder. Returns the amounts actually paid.
-fn apply_fee(payments: &[SettlePayment], fee: u64) -> anyhow::Result<Vec<u64>> {
+///
+/// `prepaid` is what the web app already set aside for fees (it is not in any
+/// payment): only the rest of `fee` is shared out. Should more have been set
+/// aside than the fee, the difference goes back to the same payments.
+fn apply_fee(payments: &[SettlePayment], fee: u64, prepaid: u64) -> anyhow::Result<Vec<u64>> {
     let payers: Vec<usize> = payments.iter().enumerate().filter(|(_, p)| p.pays_fee).map(|(i, _)| i).collect();
     if payers.is_empty() {
         return Err(anyhow!("no payment is marked to pay the network fee"));
     }
-    let share = fee / payers.len() as u64;
-    let remainder = fee % payers.len() as u64;
     let mut amounts: Vec<u64> = payments.iter().map(|p| p.zatoshis).collect();
-    for (n, &i) in payers.iter().enumerate() {
-        let cut = share + if n == 0 { remainder } else { 0 };
-        amounts[i] = amounts[i]
-            .checked_sub(cut)
-            .filter(|left| *left > 0)
-            .ok_or_else(|| anyhow!("payment {i} is too small to pay its share of the network fee ({cut} zat)"))?;
+    if fee >= prepaid {
+        let owed = fee - prepaid;
+        let share = owed / payers.len() as u64;
+        let remainder = owed % payers.len() as u64;
+        for (n, &i) in payers.iter().enumerate() {
+            let cut = share + if n == 0 { remainder } else { 0 };
+            amounts[i] = amounts[i]
+                .checked_sub(cut)
+                .filter(|left| *left > 0)
+                .ok_or_else(|| anyhow!("payment {i} is too small to pay its share of the network fee ({cut} zat)"))?;
+        }
+    } else {
+        let back = prepaid - fee;
+        let share = back / payers.len() as u64;
+        let remainder = back % payers.len() as u64;
+        for (n, &i) in payers.iter().enumerate() {
+            amounts[i] += share + if n == 0 { remainder } else { 0 };
+        }
     }
     Ok(amounts)
 }
@@ -970,11 +1073,15 @@ fn apply_fee(payments: &[SettlePayment], fee: u64) -> anyhow::Result<Vec<u64>> {
 ///   with the coordinator, and nothing is paid that wasn't deposited;
 /// - every deposit is confirmed enough to spend;
 /// - the transaction stays inside one shielded pool;
+/// - it spends at most `MAX_PAYOUT_INPUTS` notes. A vault holding more is
+///   merged first, a batch per call (the call answers with an error that says
+///   so); the web app calls again once the merge is in a block, and the
+///   merges' fees come out of the payments like the payout's own fee;
 /// - one settlement at a time: a new one is refused while the last is waiting to
 ///   be mined. After that, a vault can settle again only if it holds money
 ///   again (a deposit that arrived late), and the same rules apply.
 #[allow(deprecated)]
-async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment]) -> anyhow::Result<Settlement> {
+async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment], prepaid: u64) -> anyhow::Result<Settlement> {
     let mut vaults = load_vaults(config);
     let record = vaults
         .get(vault_id)
@@ -989,6 +1096,10 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
             ));
         }
         println!("vault {vault_id}: last settlement {} is {status}; settling what the vault holds now", previous.txid);
+    }
+    let (merges, merge_fees, merging) = open_merges(config, &record)?;
+    if merging {
+        return Err(anyhow!("vault {vault_id} is merging its payments; it can settle once that merge is in a block"));
     }
 
     if payments.is_empty() {
@@ -1013,16 +1124,39 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
                 .map(|b| (b.total().into_u64(), spendable_of(b)))
         })
         .unwrap_or((0, 0));
-    let asked: u64 = payments.iter().map(|p| p.zatoshis).sum();
-    if asked != total {
+    // What was deposited: what the vault holds now, plus what merging it has
+    // already cost. The payments and the part set aside for fees must add up
+    // to exactly that.
+    let asked: u64 = payments.iter().map(|p| p.zatoshis).sum::<u64>() + prepaid;
+    if asked != total + merge_fees {
         return Err(anyhow!(
-            "the payments add up to {asked} zat but the vault holds {total} zat; a settlement must pay out exactly what was deposited"
+            "the payments add up to {asked} zat but the vault holds {} zat; a settlement must pay out exactly what was deposited",
+            total + merge_fees
         ));
     }
     if spendable != total {
         return Err(anyhow!(
             "only {spendable} of {total} zat is confirmed enough to spend; try again when every deposit has {} confirmations",
             min_confirmations(config)
+        ));
+    }
+
+    // Too many notes for one transaction: merge a batch now, pay out later.
+    let notes = spendable_notes(&db, account, policy)?;
+    let (max_inputs, merge_batch) = payout_limits();
+    if notes.len() > max_inputs {
+        let merge = merge_step(config, &mut db, account, record.account_index, &notes, policy, merge_batch).await?;
+        if let Some(r) = vaults.get_mut(vault_id) {
+            r.merges = merges;
+            r.merges.push(merge.clone());
+        }
+        save_vaults(config, &vaults)?;
+        return Err(anyhow!(
+            "vault {vault_id} holds {} payments, more than one payout spends; merged {} of them in {} (fee {} zat). Settle again once that is in a block",
+            notes.len(),
+            merge.notes,
+            merge.txid,
+            merge.fee_zatoshis
         ));
     }
 
@@ -1048,9 +1182,9 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
     let lower_bound = 5_000 * (payments.len().max(2) as u64);
     let mut chosen = None;
     let mut last_problem = String::from("no fee was tried");
-    for extra_actions in 0..=128u64 {
+    for extra_actions in 0..=(MAX_PAYOUT_INPUTS as u64 + 8) {
         let fee = lower_bound + 5_000 * extra_actions;
-        let amounts = match apply_fee(payments, fee) {
+        let amounts = match apply_fee(payments, fee + merge_fees, prepaid) {
             Ok(a) => a,
             Err(e) => {
                 last_problem = format!("{e:#}");
@@ -1123,6 +1257,8 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
     let txids = create_proposed_transactions(
         &mut db,
         &TestNetwork,
+        &SystemClock,
+        &mut os_rng(),
         &prover,
         &prover,
         &SpendingKeys::from_unified_spending_key(usk),
@@ -1144,10 +1280,20 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
         .map(|(p, amount)| PaidOut { to: p.to.trim().to_string(), zatoshis: *amount })
         .collect();
     if let Some(r) = vaults.get_mut(vault_id) {
-        r.settlements.push(SettlementRecord { txid: txid.to_string(), fee_zatoshis: fee, payments: paid.clone() });
+        r.settlements.push(SettlementRecord {
+            txid: txid.to_string(),
+            fee_zatoshis: fee,
+            payments: paid.clone(),
+            merge_fees_zatoshis: merge_fees,
+        });
+        r.merges.clear();
     }
     save_vaults(config, &vaults)?;
-    println!("vault {vault_id} settled in {txid}: {} payments, fee {fee} zat, pool {}", paid.len(), pools[0]);
+    println!(
+        "vault {vault_id} settled in {txid}: {} payments, fee {fee} zat (and {merge_fees} zat of merges), pool {}",
+        paid.len(),
+        pools[0]
+    );
 
     let tx = db
         .get_transaction(txid)?
@@ -1156,5 +1302,209 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment])
     if let Err(e) = broadcast_with_retries(config, txid, &tx).await {
         eprintln!("vault {vault_id}: {e:#}");
     }
-    Ok(Settlement { txid: txid.to_string(), status: "pending".into(), mined_height: None, fee_zatoshis: fee, payments: paid })
+    Ok(Settlement {
+        txid: txid.to_string(),
+        status: "pending".into(),
+        mined_height: None,
+        fee_zatoshis: fee + merge_fees,
+        payments: paid,
+    })
+}
+
+/// One spendable note of a vault: where it is (to lock it) and what it is worth.
+struct VaultNote {
+    output: OutputRef,
+    pool: ShieldedPool,
+    value: u64,
+}
+
+/// The notes a payout would spend now. A note worth no more than the fee for
+/// spending it (5,000 zat, ZIP 317) is left out: the wallet counts it in no
+/// balance and never spends it, so it neither needs merging nor can be merged.
+fn spendable_notes(db: &Db, account: AccountUuid, policy: ConfirmationsPolicy) -> anyhow::Result<Vec<VaultNote>> {
+    let (target, _anchor) = db
+        .get_target_and_anchor_heights(policy.trusted())?
+        .ok_or_else(|| anyhow!("the wallet is not synced yet"))?;
+    let pools = [ShieldedPool::Sapling, ShieldedPool::Orchard, ShieldedPool::Ironwood];
+    let found = db.select_unspent_notes(account, &pools, target, &[], LockFilter::Unfiltered)?;
+    let marginal = zip317::MARGINAL_FEE.into_u64();
+    let mut out = Vec::new();
+    for n in found.sapling() {
+        out.push(VaultNote {
+            output: OutputRef::new(*n.txid(), zcash_protocol::PoolType::SAPLING, u32::from(n.output_index())),
+            pool: ShieldedPool::Sapling,
+            value: n.note().value().inner(),
+        });
+    }
+    for (pool, notes) in [(ShieldedPool::Orchard, found.orchard()), (ShieldedPool::Ironwood, found.ironwood())] {
+        for n in notes {
+            out.push(VaultNote {
+                output: OutputRef::new(*n.txid(), zcash_protocol::PoolType::Shielded(pool), u32::from(n.output_index())),
+                pool,
+                value: n.note().value().inner(),
+            });
+        }
+    }
+    out.retain(|n| n.value > marginal);
+    Ok(out)
+}
+
+/// Turns up to `merge_batch` notes (normally `MERGE_BATCH`) of a vault into one, paid back to the vault
+/// itself. The batch is the smallest notes plus the largest one, so that the
+/// new note is always worth more than the fee, however small the others are.
+/// Every other note is locked for the moment it takes to plan the merge, so
+/// that "send everything" takes only the batch.
+async fn merge_step(
+    config: &SyncConfig,
+    db: &mut Db,
+    account: AccountUuid,
+    account_index: u32,
+    notes: &[VaultNote],
+    policy: ConfirmationsPolicy,
+    merge_batch: usize,
+) -> anyhow::Result<MergeRecord> {
+    // One pool per transaction: the pool holding the most notes.
+    let pool = [ShieldedPool::Ironwood, ShieldedPool::Orchard, ShieldedPool::Sapling]
+        .into_iter()
+        .max_by_key(|p| notes.iter().filter(|n| n.pool == *p).count())
+        .expect("three pools");
+    let mut in_pool: Vec<&VaultNote> = notes.iter().filter(|n| n.pool == pool).collect();
+    in_pool.sort_by_key(|n| n.value);
+    if in_pool.len() < 2 {
+        return Err(anyhow!("too many notes to pay out, but no pool has two to merge"));
+    }
+    let take = in_pool.len().min(merge_batch);
+    let mut batch: Vec<&VaultNote> = in_pool[..take - 1].to_vec();
+    batch.push(in_pool[in_pool.len() - 1]);
+    let left_out: Vec<OutputRef> = notes
+        .iter()
+        .filter(|n| !batch.iter().any(|b| b.output == n.output))
+        .map(|n| n.output)
+        .collect();
+
+    let (target, _) = db
+        .get_target_and_anchor_heights(policy.trusted())?
+        .ok_or_else(|| anyhow!("the wallet is not synced yet"))?;
+    let until = BlockHeight::from(target) + 20;
+    if !left_out.is_empty() {
+        db.lock_outputs(&left_out, MERGE_LOCK_OWNER, until)
+            .map_err(|e| anyhow!("could not set the other notes aside: {e:?}"))?;
+    }
+    let (address, _) = db
+        .get_next_available_address(account, UnifiedAddressRequest::ORCHARD)?
+        .ok_or_else(|| anyhow!("could not derive an address to merge into"))?;
+    let recipient = ZcashAddress::from_str(&address.encode(&TestNetwork)).map_err(|_| anyhow!("bad merge address"))?;
+    let planned = propose_send_max_transfer::<_, _, _, commitment_tree::Error>(
+        db,
+        &TestNetwork,
+        account,
+        &[pool],
+        &StandardFeeRule::Zip317,
+        recipient,
+        None,
+        MaxSpendMode::MaxSpendable,
+        policy,
+        &LockedInputPolicy::Exclude,
+        None,
+    );
+    // The locks were only there to steer the plan: take them off whatever happened.
+    for output in &left_out {
+        let _ = db.unlock_output(output, MERGE_LOCK_OWNER);
+    }
+    let proposal = planned.map_err(|e| anyhow!("could not plan a merge: {e}"))?;
+
+    let step = proposal.steps().first();
+    let spent = step.shielded_inputs().map_or(0, |i| i.notes().len());
+    // Normally exactly the batch. A note of it the library can't spend yet is
+    // left for the next round; anything outside 2..=merge_batch would not be a merge.
+    if proposal.steps().len() != 1 || !(2..=merge_batch).contains(&spent) {
+        return Err(anyhow!("a merge was planned to spend {} notes (chose {}); refusing", spent, batch.len()));
+    }
+    let pools: Vec<String> = ALL_POOLS.iter().filter(|p| step.involves(**p)).map(|p| p.to_string()).collect();
+    if pools.len() != 1 {
+        return Err(anyhow!("a merge would touch more than one pool ({}); refusing", pools.join(", ")));
+    }
+    let fee = step.balance().fee_required().into_u64();
+
+    let usk = spending_key(config, account_index)?;
+    let prover = LocalTxProver::bundled();
+    let txids = create_proposed_transactions(
+        db,
+        &TestNetwork,
+        &SystemClock,
+        &mut os_rng(),
+        &prover,
+        &prover,
+        &SpendingKeys::from_unified_spending_key(usk),
+        OvkPolicy::Sender,
+        &proposal,
+        None,
+    )
+    .map_err(|e: TransferError| anyhow!("could not create the merge: {e}"))?;
+    let txid = *txids.first();
+    println!("merged {spent} notes in {txid}, fee {fee} zat, pool {}", pools[0]);
+    let tx = db
+        .get_transaction(txid)?
+        .ok_or_else(|| anyhow!("created merge {txid} not found in wallet"))?;
+    if let Err(e) = broadcast_with_retries(config, txid, &tx).await {
+        eprintln!("merge {txid}: {e:#}");
+    }
+    Ok(MergeRecord { txid: txid.to_string(), fee_zatoshis: fee, notes: spent })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pay(zatoshis: u64, pays_fee: bool) -> SettlePayment {
+        SettlePayment { to: "utest1".into(), zatoshis, memo: None, pays_fee }
+    }
+
+    #[test]
+    fn fee_is_shared_by_the_payments_that_pay_it() {
+        let amounts = apply_fee(&[pay(100_000, true), pay(50_000, false), pay(70_000, true)], 15_001, 0).unwrap();
+        assert_eq!(amounts, vec![100_000 - 7_501, 50_000, 70_000 - 7_500]);
+    }
+
+    #[test]
+    fn a_prepaid_part_is_taken_off_first() {
+        // 20,000 of fees, 15,000 already set aside: 5,000 is left to share.
+        let amounts = apply_fee(&[pay(100_000, true), pay(70_000, true)], 20_000, 15_000).unwrap();
+        assert_eq!(amounts, vec![97_500, 67_500]);
+        // Exactly covered: nobody pays more.
+        assert_eq!(apply_fee(&[pay(100_000, true)], 15_000, 15_000).unwrap(), vec![100_000]);
+    }
+
+    #[test]
+    fn more_set_aside_than_needed_goes_back() {
+        let amounts = apply_fee(&[pay(100_000, true), pay(70_000, true), pay(9, false)], 10_000, 15_001).unwrap();
+        assert_eq!(amounts, vec![102_501, 72_500, 9]);
+        // Nothing is lost: what the payments get back plus the fee is what was set aside.
+        assert_eq!(amounts.iter().sum::<u64>() + 10_000, 100_000 + 70_000 + 9 + 15_001);
+    }
+
+    #[test]
+    fn a_payment_too_small_for_its_share_is_refused() {
+        assert!(apply_fee(&[pay(4_000, true), pay(100_000, true)], 10_000, 0).is_err());
+        assert!(apply_fee(&[pay(100_000, false)], 10_000, 0).is_err());
+    }
+
+    #[test]
+    fn a_merge_always_brings_a_vault_closer_to_a_payout() {
+        // Each merge turns MERGE_BATCH notes into one, and a vault over the
+        // limit always has at least that many to choose from.
+        assert!(MERGE_BATCH >= 2 && MERGE_BATCH < MAX_PAYOUT_INPUTS);
+        // A merge of 20 Orchard actions with its proof is about 64 kB.
+        assert!(2_720 + (820 + 2_272) * MERGE_BATCH < 100_000);
+    }
+
+    #[test]
+    fn the_test_setting_only_lowers_the_limit() {
+        assert_eq!(limits_from(None), (24, 20));
+        assert_eq!(limits_from(Some("3")), (3, 2));
+        assert_eq!(limits_from(Some(" 10 ")), (10, 9));
+        assert_eq!(limits_from(Some("1")), (3, 2));
+        assert_eq!(limits_from(Some("500")), (24, 20));
+        assert_eq!(limits_from(Some("lots")), (24, 20));
+    }
 }

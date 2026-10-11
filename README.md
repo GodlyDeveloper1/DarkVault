@@ -191,9 +191,21 @@ What this does not do, said plainly:
   treats it as if it had not arrived, so that nobody can jam a payout by sending one.
 - A payout waits until every deposit in its vault is confirmed. Someone who keeps sending
   payments to their own deposit address around the close can delay it, at the cost of a
-  network fee each time. They can't take or redirect anyone's money. A vault holding more
-  than about 128 separate payments above what it pays out can't be settled by the signer as
-  it stands: a known limit.
+  network fee each time. They can't take or redirect anyone's money.
+- Seats: an auction seats 20 bidders at a time, and a sale 20 orders (`VAULT_SEATS`). A new bid
+  takes a seat when it is placed and keeps it once its deposit arrives; a bid with no deposit after
+  10 minutes (`VAULT_SEAT_HOLD_SEC`) gives its seat back, so nobody can fill an auction with bids
+  they never fund. A bid whose seat went back is still a bid: a deposit that arrives before the
+  close counts. One auction takes at most 120 bids in all (`VAULT_MAX_BIDS`), which keeps a
+  payout under the signer's 200 payments. The page shows the seats left (`lib/seats.ts`). A known
+  limit: someone placing unpaid bids from many internet addresses (20 bids an hour from each) can
+  keep seats busy until an auction has taken 120 bids in all.
+- Nobody can jam a vault with a pile of small payments. One payout spends at most 24 notes; a
+  vault holding more is merged by the signer first, 20 notes at a time, each merge a payment
+  from the vault to itself (`merge_step` in `signer/src/wallet.rs`). Every payment a bidder
+  sends beyond their first costs 5,000 zat of network fee (ZIP 317), and that comes out of
+  their own refund, handed to the signer as the prepaid part of the fee: whoever sends a
+  hundred tiny payments pays to have them spent. The payout waits a few blocks for the merges.
 
 Auctions listed before this (SHA-256 commitments, a reveal by each bidder, a deposit that
 covers the bid) keep working as they did.
@@ -266,6 +278,25 @@ card, a licence key) can't be proven used or unused by anyone, so for those the 
 delivered code matches the description, the sale stands. Sellers and bidders are anonymous, so
 there is no reputation; the bonds are what a cheat has to lose. A seller whose lot doesn't sell
 gets the bond back minus one network fee.
+
+### Listing photos: cleaned in the seller's browser
+
+A listing (an auction, an Order Flow sale or a deal) can have up to three
+photos (`vault-core/src/photos.ts`, `vault-web/lib/photoClient.ts`).
+
+- **Every photo is redrawn in the seller's browser** on a canvas and saved again
+  as a JPEG, at most 1600 pixels on its longest side and 300 KB. A redrawn
+  photo carries none of what a phone writes into a photo file: GPS location,
+  the device, the time. It is also turned the right way up.
+- **The site checks it.** A public photo must be a JPEG with no EXIF, XMP, IPTC
+  or comment block left in it (`cleanJpeg`); anything else is refused.
+- **Private auctions and deals:** each photo is encrypted in the browser with
+  the listing's key, padded to one fixed size, and bound to its place in the
+  listing. The site stores ciphertext, serves it only to a browser that shows
+  the invite's access token, never lets it into a shared cache, and the
+  browser opens it. The site sees how many photos there are, nothing else.
+- What a photo shows is the seller's choice: the page reminds them that
+  nothing in the picture should show where they live.
 
 ### Private auctions: invite only, and the site can't read what is for sale
 

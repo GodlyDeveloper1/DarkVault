@@ -3,15 +3,17 @@ name = "vault-signer"
 version = "0.1.0"
 edition = "2021"
 
-# Versions of the zcash_* crates match those already in Cargo.lock and in ECC's
-# zcash-devtool, which was verified against testnet on 2026-09-30.
+# The zcash_* crates are the first releases that know the NU7 network upgrade,
+# which testnet activated at height 4,465,026 (early October 2026). Older ones
+# build transactions with the previous consensus branch id, which the network
+# now refuses. They are pre-releases, so each is pinned to an exact version.
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
 axum = "0.8"
 bip39 = "*"
 getrandom = "0.2"
-rand = "0.8"
+rand = "0.10"
 rusqlite = { version = "0.37", features = ["array"] }
 secrecy = "0.8"
 serde = { version = "*", features = ["derive"] }
@@ -19,17 +21,17 @@ serde_json = "*"
 tokio = { version = "1", features = ["full"] }
 tonic = { version = "0.14", features = ["tls-ring", "tls-webpki-roots"] }
 
-zcash_client_backend = { version = "0.24", features = [
+zcash_client_backend = { version = "=0.25.0-pre.1", features = [
     "sync",
     "orchard",
     "lightwalletd-tonic-transport",
     "lightwalletd-tonic-tls-webpki-roots",
 ] }
-zcash_client_sqlite = "0.22"   # default features: orchard, multicore
-zcash_address = "0.13"
-zcash_primitives = "0.30"
-zcash_proofs = { version = "0.30", features = ["bundled-prover"] }
-zip321 = "0.9"
-zcash_keys = { version = "0.16.1", features = ["orchard", "sapling"] }
-zcash_protocol = "0.10"
-zip32 = "=0.2.1"               # must match the zip32 used by zcash_keys
+zcash_client_sqlite = "=0.23.0-pre.1"   # default features: orchard, multicore
+zcash_address = "=0.14.0-pre.1"
+zcash_primitives = "=0.31.0-pre.1"
+zcash_proofs = { version = "=0.31.0-pre.1", features = ["bundled-prover"] }
+zip321 = "=0.10.0-pre.1"
+zcash_keys = { version = "=0.17.0-pre.1", features = ["orchard", "sapling"] }
+zcash_protocol = "=0.11.0-pre.0"
+zip32 = "0.3"               # must match the zip32 used by zcash_keys

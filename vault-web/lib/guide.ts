@@ -334,7 +334,7 @@ const INTENTS: Intent[] = [
   {
     id: "dispute",
     q: "What if the lot is not as described?",
-    keys: ["dispute", "not as described", "scam", "fake", "wrong item", "never arrived", "did not arrive", "complain", "problem with the lot"],
+    keys: ["dispute", "not as described", "scam", "fake", "wrong item", "never arrived", "did not arrive", "complain", "problem with the lot", "does not deliver", "doesn't deliver", "never delivers", "not deliver", "seller disappears"],
     reply: {
       text:
         "The winner has a set time after the handover to open a dispute. After that the sale is final.\n\nIn a dispute the site's operator looks at what each side chooses to hand over and decides. If it goes against the seller, the price returns to the winner with the seller's bond. If it goes against the winner, the seller is paid and gets the winner's bond.\n\nIf the lot is never handed over at all, the winner is refunded without having to do anything.",
@@ -347,9 +347,41 @@ const INTENTS: Intent[] = [
     keys: ["limit", "limits", "not protect", "weakness", "risk", "downside", "catch", "trust the site", "custody", "custodial", "ip address"],
     reply: {
       text:
-        "Said plainly:\n• After the close the site learns the funded bids, so it can decide. Nobody else does.\n• The site sees every deposit, so an exact deposit tells it the bid. A larger, round one hides it.\n• The time lock is as trustworthy as drand.\n• The site holds the deposits while an auction runs.\n• The page's code comes from the site, as with any web app. The proof and the receipts can be checked without it.\n• It runs on the Zcash testnet and is in development.",
+        "Said plainly:\n• After the close the site learns the funded bids, so it can decide. Nobody else does.\n• The site sees every deposit, so an exact deposit tells it the bid. A larger, round one hides it.\n• The time lock is as trustworthy as drand.\n• An auction seats 20 bidders at a time, a sale 20 orders. A seat goes back if its bid isn't funded within 10 minutes.\n• The site holds the deposits while an auction runs.\n• The page's code comes from the site, as with any web app. The proof and the receipts can be checked without it.\n• It runs on the Zcash testnet and is in development.",
       next: ["proof", "sees"],
       actions: [{ label: "Read The Limits", href: "/#limits" }],
+    },
+  },
+  {
+    id: "photos",
+    q: "Can I add photos to a listing?",
+    keys: ["photo", "photos", "picture", "pictures", "image", "images", "upload a photo", "add a photo", "exif", "gps", "location in photo"],
+    reply: {
+      text:
+        "Yes: up to three, on the sell form, a sale or a deal. Each photo is redrawn in your browser before it is sent, which removes what phones hide in a photo file: where it was taken, the phone, the time. The site refuses a public photo that still carries any of that.\n\nIn a private auction or a deal the photos are encrypted in your browser too, all padded to the same size, so only people with the invite can see them and the site can't.\n\nCheck that nothing in the picture itself shows where you live.",
+      next: ["sell", "private"],
+      actions: [{ label: "List A Lot", href: "/sell" }],
+    },
+  },
+  {
+    id: "clear",
+    q: "How do I clear everything from this browser?",
+    keys: ["clear", "wipe", "erase", "delete my", "remove my", "forget me", "clear data", "clear browser", "shared computer", "public computer", "leave no trace"],
+    reply: {
+      text:
+        "Open the dashboard and use Clear This Browser, under Move To Another Browser. It removes your bids, seller keys, invites, saved refund address and practice wallet from this browser.\n\nSaving a vault file first is optional. With one, you can restore everything later, here or in another browser. Without one, it is gone for good.\n\nMoney is never kept in the browser, so clearing touches nothing you paid: refunds and payouts still go to the addresses you gave. What you lose is the key to open your bids, unlock what you won, confirm a handover, or hand over what you sell.",
+      next: ["move", "seats"],
+      actions: [{ label: "Open Clear This Browser", href: "/dashboard#move-clear" }],
+    },
+  },
+  {
+    id: "seats",
+    q: "How many people can bid?",
+    keys: ["seats", "seat", "full", "how many bidders", "how many bids", "how many people", "twenty", "spam", "many payments", "small payments"],
+    reply: {
+      text:
+        "Twenty at a time. An auction seats 20 bidders, and a sale 20 orders. A new bid takes a seat when it is placed and keeps it once its deposit arrives. A bid with no deposit after 10 minutes gives its seat back, so nobody can fill an auction with bids they never pay for. A deposit that comes later, before the close, still counts. The page shows how many seats are left.\n\nSomeone who sends a pile of small payments can't jam a vault either. The signer merges them first, 20 at a time, and the network fee for each payment beyond a bidder's first comes out of that bidder's own refund.",
+      next: ["bid", "limits"],
     },
   },
   {

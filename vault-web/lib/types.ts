@@ -235,6 +235,12 @@ export interface Auction {
    */
   private?: { listing: string; access_hash: string };
   /**
+   * How many listing photos there are (<data>/photos/<id>.<n>.bin), at most
+   * MAX_PHOTOS. Each is a JPEG redrawn in the seller's browser, or, for a
+   * private auction or a deal, that JPEG encrypted with the listing's key.
+   */
+  photos?: number;
+  /**
    * A private deal (the Settlement market), not an auction: two people who
    * agreed a price elsewhere settle it here. There is no bidding. The buyer
    * accepts by paying the price plus the bond; the first payment in full takes

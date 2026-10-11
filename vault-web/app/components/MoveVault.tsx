@@ -3,8 +3,8 @@
 // "Move To Another Browser": save everything this browser holds to one file,
 // and read such a file back. See lib/portable.ts. Nothing is uploaded.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PiDownloadSimpleBold, PiSuitcaseSimpleBold, PiUploadSimpleBold } from "react-icons/pi";
-import { applyVault, collect, countsOf, describe, isEmpty, MIN_PASSPHRASE, openVault, packVault, type Counts } from "@/lib/portable";
+import { PiBroomBold, PiDownloadSimpleBold, PiSuitcaseSimpleBold, PiUploadSimpleBold } from "react-icons/pi";
+import { applyVault, clearAll, collect, countsOf, describe, isEmpty, MIN_PASSPHRASE, openVault, packVault, type Counts } from "@/lib/portable";
 import { WALLET_EVENT } from "@/lib/tickets";
 
 function download(name: string, text: string) {
@@ -25,6 +25,9 @@ export default function MoveVault() {
   const [locked, setLocked] = useState<string | null>(null);
   const [unlock, setUnlock] = useState("");
   const picker = useRef<HTMLInputElement>(null);
+  // Clearing: a file saved during this visit, and the second click that confirms.
+  const [saved, setSaved] = useState(false);
+  const [confirming, setConfirming] = useState(false);
 
   const sync = useCallback(() => setCounts(countsOf(collect())), []);
   useEffect(() => {
@@ -49,6 +52,7 @@ export default function MoveVault() {
         tone: "ok",
       });
       setPass("");
+      setSaved(true);
     } catch {
       setMessage({ text: "The file could not be made in this browser.", tone: "bad" });
     } finally {
@@ -89,6 +93,19 @@ export default function MoveVault() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function clear() {
+    const gone = clearAll();
+    setConfirming(false);
+    setSaved(false);
+    sync();
+    setMessage({
+      text: isEmpty(gone)
+        ? "This browser held nothing of Dark Vault's."
+        : `Cleared ${describe(gone)} from this browser. ${saved ? "Restore your vault file here, or in another browser, to bring them back." : "Nothing was saved to a file."}`,
+      tone: "ok",
+    });
   }
 
   const holds = counts ? (isEmpty(counts) ? "Nothing yet." : `${describe(counts)}.`) : "…";
@@ -182,6 +199,53 @@ export default function MoveVault() {
             </form>
           )}
         </div>
+      </div>
+
+      <div className="move-box move-clear" id="move-clear">
+        <h3>Clear This Browser</h3>
+        <p className="small">
+          Removes everything Dark Vault keeps here: your bids, seller keys, invites, saved refund address and practice wallet. Money is never kept in
+          the browser, so nothing you paid is touched: refunds and payouts still go to the addresses you gave.
+        </p>
+        <p className="small">
+          What goes is the key to them. Without it this browser can&apos;t open your bids, unlock what you won, confirm or dispute a handover, or
+          hand over and manage what you sell. Save a vault file first if you may want them back (it uses the passphrase under Save, if you typed
+          one). It is optional.
+        </p>
+        {!confirming ? (
+          <div className="row">
+            <button
+              type="button"
+              id="clear-save-first"
+              disabled={busy || !counts || isEmpty(counts) || (pass.length > 0 && pass.length < MIN_PASSPHRASE)}
+              onClick={() => void save()}
+            >
+              <PiDownloadSimpleBold aria-hidden="true" /> {saved ? "Saved. Save Again" : "Save A Vault File First"}
+            </button>
+            <button type="button" className="danger" id="clear-start" disabled={busy || !counts || isEmpty(counts)} onClick={() => setConfirming(true)}>
+              <PiBroomBold aria-hidden="true" /> Clear Everything From This Browser
+            </button>
+          </div>
+        ) : (
+          <div className="clear-confirm" id="clear-confirm" role="alert">
+            <p className="small">
+              <b>
+                Clear {counts ? describe(counts) : "everything"} from this browser?
+              </b>{" "}
+              {saved
+                ? "You saved a vault file in this visit: keep it, it is the only way back."
+                : "You have not saved a vault file in this visit. Once cleared, this cannot be undone."}
+            </p>
+            <div className="row">
+              <button type="button" className="danger" id="clear-confirm-yes" onClick={clear}>
+                Yes, Clear Everything
+              </button>
+              <button type="button" id="clear-confirm-no" onClick={() => setConfirming(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {message && (

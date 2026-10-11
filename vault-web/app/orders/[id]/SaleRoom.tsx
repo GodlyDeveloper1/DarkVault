@@ -45,8 +45,10 @@ import {
   type Receipt,
 } from "vault-core";
 import Countdown from "@/app/components/Countdown";
+import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
 import { saleLabel, unitsWord } from "@/app/components/SaleTile";
+import { SeatsFull, seatsLeft, SeatsStat } from "@/app/components/AuctionTile";
 import { SellerDelivery, WinnerDelivery } from "@/app/auction/[id]/Delivery";
 import VerifyResult from "@/app/auction/[id]/Verify";
 import { sellerKeyFor } from "@/lib/sellerKey";
@@ -270,6 +272,7 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
               {auction.description}
             </p>
           )}
+          <PhotoGallery auctionId={auction.id} count={auction.photos ?? 0} sealed={false} title={auction.title} />
         </div>
 
         <div className="clock" id="clock">
@@ -355,6 +358,7 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
               <b id="stat-funded">{auction.funded ?? "–"}</b>
               <span>funded</span>
             </div>
+            <SeatsStat auction={auction} />
             <div>
               <b>{formatCoins(auction.reserve)}</b>
               <span>lowest price (TAZ)</span>
@@ -759,6 +763,10 @@ function OrderForm({ auction, onPlaced, hasOrders }: { auction: PublicAuction; o
     }
   }
 
+  // Every seat is taken: nobody can place an order any more.
+  const seats = seatsLeft(auction);
+  if (seats && seats.left === 0) return <SeatsFull auction={auction} what="orders" />;
+
   // After a first order, keep the form out of the way until it is asked for.
   if (hasOrders && !open) {
     return (
@@ -895,6 +903,12 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
               </>
             )}
           </p>
+          {auction.seats && auction.state === "open" && (
+            <p className="hint seat-hold" id="seat-hold">
+              Fund it within {auction.seats.hold_minutes} minutes to keep your seat. After that the seat goes back to the room, but a deposit
+              that arrives before the sale closes still counts.
+            </p>
+          )}
           <div className="row" style={{ alignItems: "flex-start" }}>
             <Qr value={uri} size={150} />
             <div className="grow">

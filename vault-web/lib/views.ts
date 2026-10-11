@@ -7,6 +7,7 @@ import { deliveryStage } from "./delivery";
 import { moneyByBid, requiredDeposit, unitFinished, unitsOf } from "./engine";
 import { HOUSE } from "./house/config";
 import { LIMITS } from "./limits";
+import { seatsOf } from "./seats";
 import { vaultInfo, type VaultInfo } from "./signer";
 import { sitePublic } from "./sitekey";
 import type { Auction, Bid } from "./types";
@@ -183,6 +184,18 @@ export function publicView(auction: Auction, { info, escrow, site_key, units }: 
     state: auction.state,
     /** Sealed bids placed, funded or not. */
     bids: auction.bids.length,
+    /** Listing photos (GET /api/auctions/<id>/photos/<n>). For a private auction or a deal they are encrypted with the listing's key. */
+    photos: auction.photos ?? 0,
+    /**
+     * Seats: how many bids (orders) it seats at once, and how many are free.
+     * A bid holds its seat for `hold_minutes` until its deposit arrives. Null for a deal, which has one buyer.
+     */
+    seats: auction.deal
+      ? null
+      : (() => {
+          const s = seatsOf(auction, money ? (bid) => (money.get(bid)?.total ?? 0) > 0 : null);
+          return { total: s.seats, left: s.left, may_free: s.may_free, closed: s.closed, hold_minutes: Math.ceil(LIMITS.seatHoldSec / 60) };
+        })(),
     /** Bids with a confirmed deposit. Null when the signer can't be asked. */
     funded: money ? auction.bids.filter((b) => (money.get(b.id)?.total ?? 0) > 0).length : null,
     /**

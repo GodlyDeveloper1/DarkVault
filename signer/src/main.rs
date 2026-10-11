@@ -134,6 +134,10 @@ async fn vault_info(
 #[derive(Deserialize)]
 struct SettleBody {
     payments: Vec<wallet::SettlePayment>,
+    /// Part of the vault the web app sets aside for network fees, in no
+    /// payment: a bidder's extra payments each carry their own.
+    #[serde(default)]
+    prepaid_fee_zatoshis: u64,
 }
 
 // Pay out everything the vault holds, in one shielded transaction.
@@ -146,7 +150,12 @@ async fn settle(
     if body.payments.len() > 200 {
         return Err((StatusCode::BAD_REQUEST, "too many payments for one settlement".into()));
     }
-    ask(&s, |reply| wallet::Command::Settle { vault_id: id, payments: body.payments, reply })
+    ask(&s, |reply| wallet::Command::Settle {
+        vault_id: id,
+        payments: body.payments,
+        prepaid_fee_zatoshis: body.prepaid_fee_zatoshis,
+        reply,
+    })
         .await
         .map(Json)
 }

@@ -41,8 +41,19 @@ export const LIMITS = {
   maxUnitLotBytes: 64 * 1024 + 2048,
   disputeReasonMax: 600,
   envelopeMax: 8000,
-  /** Each bid costs the signer a new address to watch. */
-  maxBidsPerAuction: 100,
+  /**
+   * Seats: how many bids an auction (or orders a sale) seats at once. A bid
+   * takes a seat when it is placed and keeps it once funded; see seats.ts. It
+   * keeps payouts small, and the page shows the seats left.
+   */
+  maxBidsPerAuction: num("VAULT_SEATS", 20),
+  /** How long a new bid holds its seat without a deposit before the seat goes back. */
+  seatHoldSec: num("VAULT_SEAT_HOLD_SEC", 10 * 60),
+  /**
+   * The most bids one auction takes in all, seated or not. Every bid costs
+   * the signer an address to watch, and a payout pays at most 200 people.
+   */
+  maxPlacedBids: num("VAULT_MAX_BIDS", 120),
   /** A deal has one buyer: this many payment addresses at most are made for one deal. */
   maxDealAcceptances: 5,
   /** How long a deal's offer can stand. */

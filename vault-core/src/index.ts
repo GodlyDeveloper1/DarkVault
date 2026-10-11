@@ -545,3 +545,8 @@ export * from "./invite";
 // ---------------------------------------------------------------------------
 
 export * from "./batch";
+
+// Listing photos (photos.ts): up to three per listing. Public ones are checked
+// to carry no camera details; in a private auction or a deal they are
+// encrypted with the listing's key and padded to one size.
+export * from "./photos";

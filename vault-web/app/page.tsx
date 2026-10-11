@@ -1,5 +1,24 @@
 import type { CSSProperties } from "react";
 import Link from "next/link";
+import type { IconType } from "react-icons";
+import {
+  PiArmchairBold,
+  PiArrowsMergeBold,
+  PiCheckBold,
+  PiGavelBold,
+  PiHandshakeBold,
+  PiKeyBold,
+  PiLockKeyBold,
+  PiReceiptBold,
+  PiRobotBold,
+  PiScalesBold,
+  PiShieldCheckBold,
+  PiSquaresFourBold,
+  PiStackBold,
+  PiSuitcaseSimpleBold,
+  PiUserMinusBold,
+  PiWalletBold,
+} from "react-icons/pi";
 import { HOUSE } from "@/lib/house/config";
 import AuctionsGrid from "./components/AuctionsGrid";
 import LandMotion from "./components/LandMotion";
@@ -324,6 +343,86 @@ const PROTECTIONS = [
   },
 ];
 
+// Everything Dark Vault does, market by market, so a visitor sees it is more than auctions.
+const MARKET_FEATURES: {
+  id: string;
+  art: string;
+  name: string;
+  line: string;
+  href: string;
+  go: string;
+  how: string;
+  items: string[];
+  practice?: string;
+}[] = [
+  {
+    id: "features-auctions",
+    art: "trophy",
+    name: "Auctions",
+    line: "One lot, sold to the highest sealed bid.",
+    href: "/auctions",
+    go: "See The Auctions",
+    how: "/#story",
+    items: [
+      "Sealed bids, locked in time until the close. Nobody can open one early, this site included.",
+      "The winner pays exactly what they bid, and a proof shows the highest bid won without showing any other.",
+      "Hide your bid from the site: send a larger, round deposit and get the rest back.",
+      "Private auctions: invite only, listed nowhere, the title and description encrypted in the seller's browser.",
+      "Digital lots, physical items with a sealed shipping address, or a promise the seller will keep.",
+      "Up to three photos per listing, cleaned in the seller's browser of where and how they were taken; encrypted in private auctions and deals.",
+    ],
+    practice: "Practice auctions with automated house bidders and a practice wallet the site funds.",
+  },
+  {
+    id: "features-orders",
+    art: "medal",
+    name: "Order Flow",
+    line: "Many identical units, sold in one sealed sale.",
+    href: "/orders",
+    go: "See The Sales",
+    how: "/#story-orders",
+    items: [
+      "Sell 2 to 20 units at once: licence keys, invite codes, tickets.",
+      "One sealed order per unit. The highest orders win, and each buyer pays what they offered.",
+      "The lowest winning order is public, with a proof. Every other order, and who placed it, stays hidden.",
+      "Units are handed out at random, so a unit number says nothing about how an order ranked.",
+      "Each unit has its own escrow and its own handover: a unit unlocks only for the buyer who won it.",
+    ],
+  },
+  {
+    id: "features-settlement",
+    art: "safe",
+    name: "Settlement",
+    line: "A price two people agreed, settled privately.",
+    href: "/settlement",
+    go: "Settle A Deal",
+    how: "/#story-settlement",
+    items: [
+      "No bidding: for a price already agreed in a chat, on a call, anywhere.",
+      "The terms are encrypted in the seller's browser, and one private link carries the key to the buyer.",
+      "The deal is listed nowhere. This site stores it and can't read it.",
+      "The buyer pays into a shielded escrow. The price is released when the handover is done.",
+      "The ledger shows a finished deal only if the seller says so, added once a day with the others.",
+    ],
+  },
+];
+
+// What every market gets.
+const SHARED_FEATURES: { icon: IconType; title: string; text: string }[] = [
+  { icon: PiShieldCheckBold, title: "A Shielded Vault Each", text: "Every auction, sale and deal has its own escrow vault, and every bid its own deposit address." },
+  { icon: PiScalesBold, title: "Bonds On Both Sides", text: "Seller and buyer each stake a bond. Whoever cheats or fails to deliver loses theirs to the other." },
+  { icon: PiLockKeyBold, title: "Sealed Handover", text: "A digital lot or unit is encrypted for its buyer alone. Disputes and time limits protect both sides." },
+  { icon: PiReceiptBold, title: "Signed Receipts", text: "The site signs every bid it accepts, so it can't later deny one or move it on the board." },
+  { icon: PiArmchairBold, title: "Twenty Seats", text: "Twenty bidders at a time. A bid not funded within 10 minutes gives its seat back." },
+  { icon: PiArrowsMergeBold, title: "No Jamming", text: "A pile of tiny payments is merged before a payout, at the cost of whoever sent it." },
+  { icon: PiSquaresFourBold, title: "Dashboard And Ledger", text: "Your bids, sales and deals in one place, and a public ledger of what settled." },
+  { icon: PiWalletBold, title: "Pay From Your Wallet", text: "Connect a wallet, or scan the code. Every payment is a shielded Zcash payment." },
+  { icon: PiSuitcaseSimpleBold, title: "Move Or Clear", text: "Your tickets and keys stay in this browser. Take them to another in one encrypted file, or clear them all." },
+  { icon: PiRobotBold, title: "The Vault Guide", text: "Prepared answers to the questions people ask, on every page. Not an AI." },
+  { icon: PiUserMinusBold, title: "No Accounts", text: "No sign-up, no email, no name. A key in your browser is all you hold." },
+  { icon: PiKeyBold, title: "Keys Kept Apart", text: "Only the signer, a separate program, holds the wallet's keys. The website never sees a seed." },
+];
+
 const LIMITS = [
   {
     title: "The site learns the funded bids after the close.",
@@ -336,6 +435,10 @@ const LIMITS = [
   {
     title: "The time lock is as trustworthy as drand.",
     text: "It fails only if a threshold of that network's members collude. The site can't open bids early on its own.",
+  },
+  {
+    title: "Twenty seats.",
+    text: "An auction seats 20 bidders at a time, and a sale 20 orders. A bid not funded within 10 minutes gives its seat back. Someone placing unpaid bids from many internet addresses can keep seats busy until an auction has taken 120 bids in all. Extra payments into one vault are merged first, at the sender's cost.",
   },
   {
     title: "The page's code comes from the site.",
@@ -379,6 +482,21 @@ export default function Home() {
                   Try a practice auction
                 </Link>
               )}
+            </div>
+            <div className="hero-markets" id="hero-markets">
+              <span className="hero-markets-label">Not Only Auctions. One Vault, Three Markets:</span>
+              <Link className="mchip" href="/auctions">
+                <PiGavelBold aria-hidden="true" /> Auctions
+              </Link>
+              <Link className="mchip" href="/orders">
+                <PiStackBold aria-hidden="true" /> Order Flow
+              </Link>
+              <Link className="mchip" href="/settlement">
+                <PiHandshakeBold aria-hidden="true" /> Settlement
+              </Link>
+              <Link className="mchip plain" href="/#features">
+                Everything It Does
+              </Link>
             </div>
           </div>
 
@@ -533,6 +651,59 @@ export default function Home() {
         ]}
       />
 
+      {/* Everything Dark Vault does, in all three markets. */}
+      <section className="features" id="features">
+        <div className="shell">
+          <h2 className="display" data-reveal>
+            Everything Dark Vault Does
+          </h2>
+          <p className="lead" data-reveal>
+            Not only auctions. Three markets share one shielded escrow, and all of it works today on the Zcash testnet.
+          </p>
+          <div className="features-grid">
+            {MARKET_FEATURES.map((m, i) => (
+              <article className="slab feature" id={m.id} key={m.id} data-reveal data-tilt style={{ "--i": i } as CSSProperties}>
+                <span className="slab-art" aria-hidden="true">
+                  <Art name={m.art} />
+                </span>
+                <h3>{m.name}</h3>
+                <p className="feature-line">{m.line}</p>
+                <ul className="feature-list">
+                  {[...m.items, ...(m.practice && HOUSE.enabled ? [m.practice] : [])].map((item) => (
+                    <li key={item}>
+                      <PiCheckBold aria-hidden="true" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="slab-acts">
+                  <Link className="btn primary" href={m.href}>
+                    {m.go}
+                  </Link>
+                  <Link className="btn" href={m.how}>
+                    How It Works
+                  </Link>
+                </div>
+              </article>
+            ))}
+          </div>
+          <h3 className="features-sub" data-reveal>
+            In Every Market
+          </h3>
+          <div className="shared-grid">
+            {SHARED_FEATURES.map((f, i) => (
+              <div className="shared" key={f.title} data-reveal style={{ "--i": i % 4 } as CSSProperties}>
+                <span className="shared-icon" aria-hidden="true">
+                  <f.icon />
+                </span>
+                <b>{f.title}</b>
+                <span>{f.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       <section className="sees" id="privacy">
         <div className="shell sees-in">
           <div className="sees-art" aria-hidden="true" data-reveal>
@@ -637,6 +808,12 @@ export default function Home() {
             </Link>
             <Link className="btn lg" href="/sell">
               Sell something
+            </Link>
+            <Link className="btn lg" href="/orders">
+              See The Sales
+            </Link>
+            <Link className="btn lg" href="/settlement">
+              Settle A Deal
             </Link>
           </div>
         </div>

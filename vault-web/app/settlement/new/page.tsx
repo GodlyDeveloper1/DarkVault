@@ -15,6 +15,7 @@ import {
   bondFor,
   encryptListing,
   encryptLot,
+  encryptPhoto,
   formatCoins,
   inviteAccess,
   inviteFromManage,
@@ -26,8 +27,10 @@ import {
   sha256Hex,
   toBase64,
 } from "vault-core";
+import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
 import { rememberInvite } from "@/lib/invites";
+import type { PickedPhoto } from "@/lib/photoClient";
 import { addressProblem } from "@/lib/wallet";
 
 const OFFERS: [string, number][] = [
@@ -49,6 +52,7 @@ type Kind = "digital" | "physical" | "promise";
 export default function NewDeal() {
   const [title, setTitle] = useState("");
   const [terms, setTerms] = useState("");
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
   const [price, setPrice] = useState("");
   const [kind, setKind] = useState<Kind>("digital");
   const [secret, setSecret] = useState("");
@@ -127,6 +131,8 @@ export default function NewDeal() {
           // The terms leave this page encrypted. The site gets the ciphertext and the hash of an access token.
           private: { listing: await encryptListing(invite, { title: title.trim(), description: terms.trim() }), access_hash: await sha256Hex(await inviteAccess(invite)) },
           deal: { public_price: showPrice },
+          // Photos, redrawn when picked, encrypted here with the deal's key and padded to one size.
+          ...(photos.length ? { photos: await Promise.all(photos.map(async (p, i) => toBase64(await encryptPhoto(invite, i, p.bytes)))) } : {}),
           reserve: priceZat,
           duration_seconds: offer,
           payout_address: payout.trim(),
@@ -253,6 +259,8 @@ export default function NewDeal() {
             Both are encrypted in your browser before they are sent. Only someone with the deal link can read them: this site can&apos;t. One
             exception: if the buyer opens a dispute, their browser gives the operator the key to these terms, so the dispute can be judged.
           </p>
+
+          <PhotoPicker photos={photos} onChange={setPhotos} sealed />
 
           <label htmlFor="price">The Price (TAZ)</label>
           <input id="price" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.5" />

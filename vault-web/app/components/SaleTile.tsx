@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { formatCoins } from "vault-core";
 import type { PublicAuction } from "@/lib/views";
+import { SeatsTag, TileCover } from "./AuctionTile";
 
 export const unitsWord = (n: number) => `${n} ${n === 1 ? "Unit" : "Units"}`;
 
@@ -23,11 +24,13 @@ export default function SaleTile({ a }: { a: PublicAuction }) {
   const sold = !!a.outcome?.sold;
   return (
     <Link href={`/orders/${a.id}`} className="tile sale-tile" data-sale={a.id}>
+      <TileCover a={a} />
       <span className={`badge ${s.cls}`}>
         {a.state === "open" && <i className="dot live" />}
         {s.text}
       </span>
       <span className="badge units-tag">{unitsWord(a.batch?.units ?? 0)}</span>
+      <SeatsTag a={a} />
       <h3>{a.title}</h3>
       <p className="muted small" style={{ margin: 0 }}>
         {a.description.length > 110 ? `${a.description.slice(0, 110)}…` : a.description || "No description."}

@@ -54,8 +54,13 @@ export interface VaultInfo {
   chain_tip: number;
   scanned_height: number;
   min_confirmations: number;
+  /** Network fees already spent merging the vault's notes are counted in: the next payout pays them. */
   balance_total_zatoshis: number;
   balance_spendable_zatoshis: number;
+  /** Fees of merges the next payout owes (a vault holding more payments than one payout spends is merged first). */
+  merge_fees_zatoshis?: number;
+  /** A merge is waiting for a block. */
+  merging?: boolean;
   deposits: Deposit[];
   settlement: SignerSettlement | null;
   settlements: SignerSettlement[];
@@ -125,9 +130,10 @@ function client(url: string, name: string) {
       return value;
     },
 
-    async settleVault(vaultId: string, payments: SettlePayment[]): Promise<SignerSettlement> {
+    /** `prepaid`: part of the vault set aside for network fees, in no payment (a bidder's extra payments each carry their own). */
+    async settleVault(vaultId: string, payments: SettlePayment[], prepaid = 0): Promise<SignerSettlement> {
       try {
-        return await call<SignerSettlement>(`/vaults/${vaultId}/settle`, json({ payments }), 15 * 60_000);
+        return await call<SignerSettlement>(`/vaults/${vaultId}/settle`, json({ payments, prepaid_fee_zatoshis: prepaid }), 15 * 60_000);
       } finally {
         cache.delete(vaultId);
       }

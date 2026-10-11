@@ -5,7 +5,7 @@ import "server-only";
 import { newId } from "vault-core";
 import { advance, lockInTime } from "./engine";
 import { createVault, newDepositAddress } from "./signer";
-import { createAuction, saveLot, saveUnitLot } from "./store";
+import { createAuction, saveLot, savePhoto, saveUnitLot } from "./store";
 import type { Auction, Delivery } from "./types";
 
 export interface Listing {
@@ -30,6 +30,8 @@ export interface Listing {
   deal?: Auction["deal"];
   /** A batch sale (Order Flow): the encrypted lot of each unit, with the hash of its key. `reserve` is the lowest price per unit. */
   unitLots?: { key_hash: string; bytes: Uint8Array }[];
+  /** Listing photos, checked by the caller: clean JPEGs, or encrypted ones for a private listing. */
+  photos?: Uint8Array[];
 }
 
 /** Opens the vaults and saves the auction. Throws SignerError if the signer can't be reached. */
@@ -45,6 +47,8 @@ export async function createListing(l: Listing): Promise<Auction> {
   }
   if (l.lot) await saveLot(id, l.lot);
   if (l.unitLots) for (let i = 0; i < l.unitLots.length; i++) await saveUnitLot(id, i, l.unitLots[i]!.bytes);
+  const photos = l.photos ?? [];
+  for (let i = 0; i < photos.length; i++) await savePhoto(id, i, photos[i]!);
   const record: Auction = {
     id,
     created_at: now,
@@ -62,6 +66,7 @@ export async function createListing(l: Listing): Promise<Auction> {
     ...(l.delivery && escrow ? { delivery: { ...l.delivery, ...escrow } } : {}),
     ...(l.house ? { house: l.house } : {}),
     ...(l.private ? { private: l.private } : {}),
+    ...(photos.length ? { photos: photos.length } : {}),
     ...(l.unitLots ? { batch: { units: l.unitLots.length, lots: l.unitLots.map((u) => ({ key_hash: u.key_hash, bytes: u.bytes.length })) } } : {}),
     // With a bond, bidding opens when the seller's bond has arrived.
     state: l.delivery && l.delivery.seller_bond > 0 ? "funding" : "open",

@@ -2,7 +2,7 @@
 // market) is created here too: it is the same record with a fixed price and
 // no bidding. So is a batch sale (the Order Flow market): the same record
 // with several units, each with an encrypted lot of its own.
-import { BATCH_MAX_ORDER, BATCH_MAX_UNITS, BATCH_MIN_UNITS, MIN_BOND, bondFor, fromBase64, validSealedListing } from "vault-core";
+import { BATCH_MAX_ORDER, BATCH_MAX_UNITS, BATCH_MIN_UNITS, MAX_PHOTOS, MIN_BOND, PHOTO_MAX_BYTES, SEALED_PHOTO_BYTES, bondFor, cleanJpeg, fromBase64, validSealedListing } from "vault-core";
 import { DEAL_TITLE, PRIVATE_TITLE } from "@/lib/access";
 import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
@@ -28,8 +28,8 @@ export async function POST(req: Request) {
   const wait = limited("create", clientKey(req), 5, 3600_000);
   if (wait) return tooMany(wait, "new auctions");
 
-  // Large enough for an encrypted lot of 1 MB, as base64.
-  const body = await readJson(req, 1_450_000);
+  // Large enough for an encrypted lot of 1 MB and three photos, as base64.
+  const body = await readJson(req, 3_000_000);
   if (!body) return bad("invalid request, or the lot is larger than 1 MB");
 
   // A private auction: the title and description arrive encrypted (the
@@ -83,6 +83,27 @@ export async function POST(req: Request) {
     // Every unit has a key of its own: the same key twice would let one buyer open another's unit.
     if (new Set(lots.map((l) => l.key_hash)).size !== lots.length) return bad("two units have the same key");
     batch = { lots };
+  }
+  // Listing photos. A public one must be a JPEG with no camera details left in
+  // it (the seller's browser redraws every photo); a private one arrives
+  // encrypted, all the same size, and can't be checked here.
+  const photos: Uint8Array[] = [];
+  if (body.photos !== undefined) {
+    if (!Array.isArray(body.photos) || body.photos.length > MAX_PHOTOS) return bad(`a listing can have at most ${MAX_PHOTOS} photos`);
+    for (const raw of body.photos as unknown[]) {
+      let bytes: Uint8Array;
+      try {
+        bytes = fromBase64(typeof raw === "string" ? raw : "!");
+      } catch {
+        return bad("a photo is not valid");
+      }
+      if (hidden) {
+        if (bytes.length !== SEALED_PHOTO_BYTES) return bad("an encrypted photo is not valid");
+      } else if (!cleanJpeg(bytes)) {
+        return bad(`a photo must be a JPEG of at most ${Math.round(PHOTO_MAX_BYTES / 1000)} KB, with no camera details in it; please pick it again`);
+      }
+      photos.push(bytes);
+    }
   }
   const units = batch?.lots.length ?? 1;
   const title = hidden ? (deal ? DEAL_TITLE : PRIVATE_TITLE) : typeof body.title === "string" ? body.title.trim() : "";
@@ -176,6 +197,7 @@ export async function POST(req: Request) {
       ...(hidden ? { private: hidden } : {}),
       ...(deal ? { deal: { price: reserve, public_price: deal.public_price } } : {}),
       ...(batch ? { unitLots: batch.lots } : {}),
+      ...(photos.length ? { photos } : {}),
     });
     return ok({ auction: publicView(auction, { info: null, escrow: null, site_key: null }) }, 201);
   } catch (e) {
