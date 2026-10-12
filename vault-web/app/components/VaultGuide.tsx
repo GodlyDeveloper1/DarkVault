@@ -10,6 +10,7 @@ import { greeting, match, questionText, replyFor, suggestions, type GuidePage, t
 import { chooseSpeed, chooseVoice, hush, localVoice, localVoices, speak, speed, SPEEDS, watchVoices, type Speed } from "@/lib/speech";
 
 const VOICE_KEY = "dv-guide-voice";
+const SPEED_NAMES: Record<Speed, string> = { 1: "Normal", 1.15: "Fast", 1.3: "Faster", 1.5: "Fastest" };
 
 type Msg = { id: number; from: "me" | "guide"; text: string; actions?: Reply["actions"]; next?: string[]; done: boolean };
 
@@ -258,7 +259,7 @@ export default function VaultGuide() {
                     setRate(s);
                   }}
                 >
-                  {s === 1 ? "Normal" : s === 1.15 ? "Faster" : "Fastest"}
+                  {SPEED_NAMES[s]}
                 </button>
               ))}
               {voices.length > 1 && (
@@ -274,9 +275,10 @@ export default function VaultGuide() {
                     speak("This is how I sound.");
                   }}
                 >
-                  {voices.map((n) => (
+                  {/* Named by number, most natural first: never the person's name a system gives its voices. */}
+                  {voices.map((n, i) => (
                     <option key={n} value={n}>
-                      {n.replace(/^Microsoft /, "").replace(/ - .*$/, "")}
+                      Vault Voice {i + 1}
                     </option>
                   ))}
                 </select>

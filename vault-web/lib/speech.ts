@@ -15,7 +15,7 @@
 const VOICE_KEY = "dv-guide-voice-name";
 const SPEED_KEY = "dv-guide-voice-speed";
 
-export const SPEEDS = [1, 1.15, 1.3] as const;
+export const SPEEDS = [1, 1.15, 1.3, 1.5] as const;
 export type Speed = (typeof SPEEDS)[number];
 
 export function speechAvailable(): boolean {
