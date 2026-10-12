@@ -68,7 +68,7 @@ import {
 } from "vault-core";
 import { beaconChain, fetchBeacon } from "./drand";
 import { LIMITS } from "./limits";
-import { createAuction, listRecords, loadAuction, loadUnit, saveProof, withAuction, withUnit } from "./store";
+import { createAuction, listRecords, loadAuction, loadUnit, saveProof, withAuction, withUnit, deleteEvidence } from "./store";
 import { createVault, newDepositAddress, settleVault, vaultInfo, type VaultInfo } from "./signer";
 import { siteKey } from "./sitekey";
 import type { Auction, Delivery, PaymentRecord, ResolutionReason } from "./types";
@@ -750,7 +750,7 @@ async function splitBond(sale: Auction, units: Auction[], now: number): Promise<
   }
   if (info.balance_spendable_zatoshis !== total) return false; // still confirming
 
-  const payments = planBondSplit(sale.id, total, b.units, sale.seller.payout_address, units.map((u) => u.delivery!.escrow_address));
+  const payments = planBondSplit(sale.id, total, b.units, sale.seller.payout_address, units.map((u) => u.delivery!.escrow_address), d.seller_bond);
   const result = await settleVault(
     d.escrow_vault_id,
     payments.map((p) => ({ to: p.to, zatoshis: p.zatoshis, memo: p.memo, pays_fee: p.pays_fee })),
@@ -803,7 +803,13 @@ export function dueResolution(d: Delivery, now: number): { decision: "release" |
     return now > (d.address_by ?? Infinity) ? { decision: "refund", reason: "no-shipping-details", fault: "winner" } : null;
   }
   if (!d.handover) return now > (d.deliver_by ?? Infinity) ? { decision: "refund", reason: "not-delivered", fault: "seller" } : null;
-  if (d.dispute) return null; // decided by the keys or by the operator
+  if (d.dispute) {
+    // Decided by the keys, by the operator, or between the two sides. An
+    // operator who doesn't decide in time can't trap anyone's money: the
+    // price goes back to the winner, and each bond to its owner.
+    if (d.dispute.kind !== "wrong-key" && now > d.dispute.at + LIMITS.disputeDecideSec * 1000) return { decision: "refund", reason: "operator-timeout", fault: "none" };
+    return null;
+  }
   return now > (d.dispute_by ?? Infinity) ? { decision: "release", reason: "no-complaint", fault: "none" } : null;
 }
 
@@ -814,6 +820,11 @@ async function payEscrow(auction: Auction, now: number): Promise<void> {
     const due = dueResolution(d, now);
     if (!due) return;
     d.resolution = { ...due, at: now };
+    // Keys a winner handed over for a dispute were for deciding it: not kept once it is decided.
+    if (d.dispute) {
+      delete d.dispute.lot_key;
+      delete d.dispute.listing_key;
+    }
   }
   const info = await vaultInfo(d.escrow_vault_id, true);
   const sold = auction.outcome?.sold === true;
@@ -830,11 +841,14 @@ async function payEscrow(auction: Auction, now: number): Promise<void> {
     };
     d.payout = { txid: info.settlement.txid, fee: info.settlement.fee_zatoshis, at: now, owed: paid + info.settlement.fee_zatoshis, paid, to_seller: got(auction.seller.payout_address), to_winner: got(winnerAddress) };
     auction.state = "settled";
+    if (d.dispute?.evidence) await deleteEvidence(auction.id).catch(() => {});
     return;
   }
 
   const total = info.balance_total_zatoshis;
   let sellerBond: number;
+  // What the seller sent above the bond asked for: never at stake, always theirs.
+  let sellerExtra = 0;
   if (auction.unit_of) {
     // A unit of a batch sale. Nothing reaches this vault from outside: the
     // sale sends it the winner's price and bond, then the seller's bond for
@@ -843,9 +857,11 @@ async function payEscrow(auction: Auction, now: number): Promise<void> {
     if (price === undefined || bond === undefined || total < price + bond) return;
     sellerBond = Math.min(bond, total);
   } else {
-    sellerBond = Math.min(sellerBondSeen(info), total);
+    const seen = Math.min(sellerBondSeen(info), total);
+    sellerBond = Math.min(seen, d.seller_bond ?? 0);
+    sellerExtra = seen - sellerBond;
     // After a sale the price is on its way here from the first payout. Wait for it.
-    if (sold ? total <= sellerBond : total === 0) {
+    if (sold ? total <= sellerBond + sellerExtra : total === 0) {
       if (!sold && d.seller_bond === 0) auction.state = "settled";
       return;
     }
@@ -856,7 +872,7 @@ async function payEscrow(auction: Auction, now: number): Promise<void> {
   if (sold && !winner) throw new Error("the winning bid is missing");
   const payments = planEscrowPayout(
     memoId(auction),
-    { total, sellerBond, buyerBond: sold ? Math.min(d.buyer_bond, total - sellerBond) : 0 },
+    { total, sellerBond, sellerExtra, buyerBond: sold ? Math.min(d.buyer_bond, total - sellerBond - sellerExtra) : 0, winnerPercent: d.resolution.winner_percent },
     d.resolution.decision,
     d.resolution.fault,
     auction.seller.payout_address,
@@ -880,6 +896,8 @@ async function payEscrow(auction: Auction, now: number): Promise<void> {
     to_winner: part("escrow-refund"),
   };
   auction.state = "settled";
+  // Evidence photos were for deciding the dispute. The payout is made: they are deleted.
+  if (d.dispute?.evidence) await deleteEvidence(auction.id).catch(() => {});
 }
 
 /**

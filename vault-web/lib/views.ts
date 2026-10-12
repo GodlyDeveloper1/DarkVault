@@ -3,7 +3,7 @@
 // through one of these three functions.
 import "server-only";
 import { boardStatusOf, isPublicBeacon, roundTimeMs } from "vault-core";
-import { deliveryStage } from "./delivery";
+import { complaintSeconds, deliveryStage } from "./delivery";
 import { moneyByBid, requiredDeposit, unitFinished, unitsOf } from "./engine";
 import { HOUSE } from "./house/config";
 import { LIMITS } from "./limits";
@@ -68,8 +68,26 @@ function deliveryCommon(auction: Auction, escrow: VaultInfo | null) {
     seller_bond: d.seller_bond ?? 0,
     buyer_bond: d.buyer_bond ?? 0,
     /** A complaint waiting for the operator, with the seller's answer if they gave one. */
-    dispute: d.dispute ? { at: d.dispute.at, kind: d.dispute.kind ?? "physical", reason: d.dispute.reason ?? null, verdict: d.dispute.verdict ?? null, seller_reply: d.dispute.seller_reply?.text ?? null } : null,
-    resolution: d.resolution ? { decision: d.resolution.decision, reason: d.resolution.reason, fault: d.resolution.fault ?? "none" } : null,
+    dispute: d.dispute
+      ? {
+          at: d.dispute.at,
+          kind: d.dispute.kind ?? "physical",
+          reason: d.dispute.reason ?? null,
+          verdict: d.dispute.verdict ?? null,
+          seller_reply: d.dispute.seller_reply?.text ?? null,
+          /** The seller's standing offer: this percentage of the price back to the winner, if they accept. */
+          offer_percent: d.dispute.offer?.percent ?? null,
+          /** How many evidence photos each side has added. Only the operator sees the photos. */
+          evidence: { winner: d.dispute.evidence?.winner ?? 0, seller: d.dispute.evidence?.seller ?? 0 },
+          /** If the operator hasn't decided by then, the price goes back and both bonds too. */
+          decide_by: d.dispute.kind === "wrong-key" ? null : d.dispute.at + LIMITS.disputeDecideSec * 1000,
+        }
+      : null,
+    resolution: d.resolution ? { decision: d.resolution.decision, reason: d.resolution.reason, fault: d.resolution.fault ?? "none", winner_percent: d.resolution.winner_percent ?? null } : null,
+    /** Physical: the time to complain was extended once ("it hasn't arrived yet"). */
+    extended_at: d.extended_at ?? null,
+    /** How long the winner has to confirm or complain after the handover (a parcel: never under the site's minimum). */
+    complaint_seconds: complaintSeconds(d),
     /** Whether the second payout has been mined. */
     paid: d.payout ? settlementStatus(escrow, d.payout.txid) : null,
   };

@@ -15,9 +15,9 @@
 // bonds: whoever is at fault forfeits theirs to the other side (see
 // vault-core planEscrowPayout).
 import "server-only";
-import { decryptListingWithKey, decryptLot, judgeDigitalDelivery, lotKeyHash, type Fault, type ListingText, type LotHeader } from "vault-core";
+import { cleanJpeg, decryptListingWithKey, decryptLot, fromBase64, judgeDigitalDelivery, lotKeyHash, type Fault, type ListingText, type LotHeader } from "vault-core";
 import { LIMITS } from "./limits";
-import { lotOf } from "./store";
+import { lotOf, saveEvidence, type Side } from "./store";
 import type { Auction, Delivery } from "./types";
 
 const ENVELOPE = /^[A-Za-z0-9+/]{80,}={0,2}$/;
@@ -49,8 +49,70 @@ export function sellerHandover(auction: Auction, now: number, envelope: string |
   }
   if (now > (d.deliver_by ?? 0)) return "the time to hand over has passed";
   d.handover = envelope ? { at: now, envelope } : { at: now };
-  d.dispute_by = now + d.dispute_seconds * 1000;
+  d.dispute_by = now + complaintSeconds(d) * 1000;
   return null;
+}
+
+/**
+ * How long the winner has to confirm or complain after the handover. A
+ * physical parcel takes days to arrive, so it is never less than the site's
+ * minimum for physical lots, whatever the seller chose; otherwise a seller
+ * could mark it shipped at once and be paid before the box is opened.
+ */
+export function complaintSeconds(d: Delivery): number {
+  return d.kind === "physical" ? Math.max(d.dispute_seconds, LIMITS.minPhysicalComplaintSec) : d.dispute_seconds;
+}
+
+/** Physical: "it hasn't arrived yet". Once, before the time to complain runs out, it adds another complaint window. */
+export function winnerExtend(auction: Auction, now: number): string | null {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  if (d.kind !== "physical") return "only a parcel's time can be extended";
+  if (!d.handover) return "the seller hasn't marked it shipped yet";
+  if (d.dispute) return "a dispute is open";
+  if (d.extended_at) return "the time has already been extended once";
+  if (now > (d.dispute_by ?? 0)) return "the time to complain has passed";
+  d.extended_at = now;
+  d.dispute_by = (d.dispute_by ?? now) + complaintSeconds(d) * 1000;
+  return null;
+}
+
+/**
+ * The seller offers part of the price back, to end a dispute without the
+ * operator. They can change the offer, or withdraw it with 0, until the winner
+ * accepts. 100 is the whole price: a refund the seller chose, with nobody at fault.
+ */
+export function sellerOffer(auction: Auction, now: number, percent: unknown): string | null {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  if (!d.dispute || d.dispute.kind === "wrong-key") return "there is no complaint to settle";
+  if (typeof percent !== "number" || !Number.isInteger(percent) || percent < 0 || percent > 100) return "offer a whole percentage of the price, from 1 to 100 (or 0 to withdraw it)";
+  if (percent === 0) delete d.dispute.offer;
+  else d.dispute.offer = { at: now, percent };
+  return null;
+}
+
+/** The winner accepts the seller's offer: the dispute ends, nobody at fault, both bonds go back. */
+export function winnerAcceptOffer(auction: Auction, now: number, percent: unknown): string | null {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  const offer = d.dispute?.offer;
+  if (!offer) return "the seller has not made an offer";
+  // The winner names what they saw, so a changed offer can't be accepted by mistake.
+  if (percent !== offer.percent) return "the seller has changed the offer; reload the page and look again";
+  d.resolution =
+    offer.percent === 100
+      ? { decision: "refund", reason: "agreed", fault: "none", at: now }
+      : { decision: "split", reason: "agreed", fault: "none", at: now, winner_percent: offer.percent };
+  forgetKeys(d);
+  return null;
+}
+
+/** The keys the winner handed over were for deciding the dispute. Once it is decided they are not kept. */
+function forgetKeys(d: Delivery): void {
+  if (!d.dispute) return;
+  delete d.dispute.lot_key;
+  delete d.dispute.listing_key;
 }
 
 /** The seller answers a complaint, once, for the operator to read. */
@@ -178,16 +240,21 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
  * the price to the winner. Unless `noFault` is set, the side that lost the
  * dispute also loses its bond to the other.
  */
-export function operatorResolve(auction: Auction, now: number, decision: unknown, noFault: unknown): string | null {
+export function operatorResolve(auction: Auction, now: number, decision: unknown, noFault: unknown, winnerPercent?: unknown): string | null {
   const d = inProgress(auction);
   if (typeof d === "string") return d;
   if (!d.dispute || d.dispute.kind === "wrong-key") return "there is no dispute to decide";
-  if (decision !== "release" && decision !== "refund") return "the decision must be release or refund";
-  const fault: Fault = noFault === true ? "none" : decision === "release" ? "winner" : "seller";
-  d.resolution = { decision, reason: "operator", fault, at: now };
-  // The keys the winner handed over were for this decision. It is made: they are not kept.
-  delete d.dispute.lot_key;
-  delete d.dispute.listing_key;
+  if (decision === "split") {
+    // Both sides share the price, for when neither is to blame (a parcel damaged in the post) or both are a little.
+    if (typeof winnerPercent !== "number" || !Number.isInteger(winnerPercent) || winnerPercent < 1 || winnerPercent > 99)
+      return "a split gives the winner a whole percentage of the price, from 1 to 99";
+    d.resolution = { decision: "split", reason: "operator", fault: "none", at: now, winner_percent: winnerPercent };
+  } else {
+    if (decision !== "release" && decision !== "refund") return "the decision must be release, refund or split";
+    const fault: Fault = noFault === true ? "none" : decision === "release" ? "winner" : "seller";
+    d.resolution = { decision, reason: "operator", fault, at: now };
+  }
+  forgetKeys(d);
   return null;
 }
 
@@ -236,4 +303,28 @@ export function deliveryStage(auction: Auction): DeliveryStage {
   if (d.handover) return "awaiting-confirmation";
   if (d.kind !== "digital" && !d.shipping) return "awaiting-address";
   return "awaiting-handover";
+}
+
+/**
+ * A photo for the operator, from either side of an open dispute: what
+ * arrived, the packaging, a receipt of posting. Cleaned in the browser like a
+ * listing photo (no location, device or time) and checked again here. Seen
+ * only by the operator; deleted once the dispute's payout is made.
+ */
+export async function addEvidence(auction: Auction, side: Side, photo: unknown): Promise<string | null> {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  if (!d.dispute || d.dispute.kind === "wrong-key") return "there is no dispute to add a photo to";
+  const count = d.dispute.evidence?.[side] ?? 0;
+  if (count >= LIMITS.maxEvidencePhotos) return `you can add at most ${LIMITS.maxEvidencePhotos} photos`;
+  let bytes: Uint8Array;
+  try {
+    bytes = typeof photo === "string" ? fromBase64(photo) : new Uint8Array();
+  } catch {
+    return "the photo is not readable";
+  }
+  if (!cleanJpeg(bytes)) return "the photo must be a cleaned JPEG of at most 300 KB; add it again from this page";
+  await saveEvidence(auction.id, side, count, bytes);
+  d.dispute.evidence = { winner: d.dispute.evidence?.winner ?? 0, seller: d.dispute.evidence?.seller ?? 0, [side]: count + 1 };
+  return null;
 }

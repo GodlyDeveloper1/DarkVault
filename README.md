@@ -254,7 +254,9 @@ Escrow alone means a cheat only fails to gain. Bonds make them lose.
 
 - **The seller's bond** is paid into the auction's escrow vault before bidding opens (the
   listing stays hidden until it arrives, and is cancelled if it never does). Bidders see the
-  amount. The minimum is 10% of the reserve; a seller can stake more.
+  amount. It is fixed: 10% of the reserve (a deal's price, an Order Flow sale's lowest unit
+  price, per unit), never under 0.0005 TAZ, the same amount every bidder puts down. Only that
+  amount is ever at stake: anything a seller sends above it comes straight back.
 - **The bidder's bond** rides on every bid: a bid counts only if its deposit covers the bid plus
   the bond. Losing bidders get it back at the close with the rest of their deposit.
 - At the end, each bond goes back to its owner, in full, unless its owner was at fault:
@@ -266,6 +268,8 @@ Escrow alone means a cheat only fails to gain. Bonds make them lose.
 | Winner opened a dispute and lost it | seller | seller | **seller** |
 | Winner never said where to send a posted lot | winner | seller | **seller** |
 | Operator finds nobody at fault | as decided | seller | winner |
+| Split, by the operator or agreed between the two | shared by the percentage | seller | winner |
+| The operator did not decide within the deadline | winner | seller | winner |
 | Lot did not sell | | seller | |
 
 Every row pays out exactly what the escrow vault holds (`planEscrowPayout` in `vault-core`).
@@ -278,6 +282,35 @@ card, a licence key) can't be proven used or unused by anyone, so for those the 
 delivered code matches the description, the sale stands. Sellers and bidders are anonymous, so
 there is no reputation; the bonds are what a cheat has to lose. A seller whose lot doesn't sell
 gets the bond back minus one network fee.
+
+### Disputes: settled between the two, or by the operator, never left hanging
+
+The same rules in every market (auctions, deals, and each unit of an Order Flow sale):
+
+- **A parcel gets time to arrive.** For a physical lot the time to complain after "shipped" is
+  never under a week (`VAULT_MIN_PHYSICAL_COMPLAINT_SEC`), whatever the seller chose, so a
+  seller can't mark it shipped at once and be paid before the box is opened. The winner can
+  press **Not Arrived Yet** once, which adds the same time again.
+- **Settle it yourselves.** During a dispute the seller can offer part of the price back (1% to
+  100%) and change or withdraw the offer. If the winner accepts, it ends there, with nobody at
+  fault: the winner gets that share and their bond, the seller the rest and their bond.
+- **Evidence photos.** Each side can add up to three photos (what arrived, the packaging, a
+  receipt of posting). They are cleaned in the browser like listing photos, checked again by
+  the site (`cleanJpeg`), shown only to the operator, and deleted once the payout is made. The
+  page reminds people to cover any name or address label first.
+- **The operator decides** on a private page, `/operator`, linked from nowhere: without the
+  operator key it shows a key box and every request behind it answers "not found". It lists
+  every open dispute with the complaint, the seller's answer, any standing offer, the photos,
+  and (for a digital lot) the delivered item. The operator can release, refund, or **split**
+  the price by a percentage; release and refund can also be marked "nobody at fault".
+- **A deadline for the operator.** A dispute not decided within a week
+  (`VAULT_DISPUTE_DECIDE_SEC`) ends as a refund with nobody at fault, so an absent operator
+  can't trap anyone's money.
+- **The site's own addresses are refused** as refund and payout addresses (found on testnet: a
+  pasted escrow address sent a refund back into the escrow).
+
+What is still true: the operator has to be trusted to judge fairly, and a physical dispute is
+one side's word, and photos, against the other's.
 
 ### Listing photos: cleaned in the seller's browser
 
@@ -660,6 +693,8 @@ bonds.
 | `VAULT_BOND_WAIT_SEC` | `7200` | How long a new listing waits for the seller's bond before it is cancelled |
 | `VAULT_LEDGER_BATCH_SEC` | `86400` | How often completed deals that show their price are added to the public ledger (batches close on a fixed clock, so a deal can't be timed). Shorter only for tests and demos |
 | `VAULT_MIN_DELIVERY_SEC` | `3600` | Shortest handover and complaint time limits a seller can set |
+| `VAULT_MIN_PHYSICAL_COMPLAINT_SEC` | `604800` | A physical lot's shortest time to complain after "shipped" (one week), whatever the seller chose. Shorten it only for a demo |
+| `VAULT_DISPUTE_DECIDE_SEC` | `604800` | An open dispute the operator hasn't decided in this time ends as a refund with nobody at fault |
 | `VAULT_OPERATOR_KEY` | unset | Turns on the operator's routes: disputes and the house purse. 24 characters or more. Keep it secret |
 | `HOUSE_SIGNER_URL` | unset | The house signer, for practice auctions and practice wallets. Unset: the site has neither |
 | `VAULT_PRACTICE_DURATION_SEC` | `480` | How long a practice auction takes bids |

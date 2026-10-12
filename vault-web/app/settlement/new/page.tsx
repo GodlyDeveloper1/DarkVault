@@ -27,6 +27,7 @@ import {
   sha256Hex,
   toBase64,
 } from "vault-core";
+import BondFixed from "@/app/components/BondFixed";
 import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
 import { rememberInvite } from "@/lib/invites";
@@ -60,7 +61,6 @@ export default function NewDeal() {
   const [deliverIn, setDeliverIn] = useState(86400);
   const [disputeIn, setDisputeIn] = useState(86400);
   const [offer, setOffer] = useState(86400);
-  const [bond, setBond] = useState("");
   const [bondPercent, setBondPercent] = useState(10);
   const [payout, setPayout] = useState("");
   const [showPrice, setShowPrice] = useState(true);
@@ -95,10 +95,9 @@ export default function NewDeal() {
             ? "Add the text or a file the buyer will receive."
             : null;
   const minBond = priceZat !== null && !priceProblem ? bondFor(priceZat, bondPercent) : 0;
-  const bondZat = bond.trim() === "" ? minBond : parseCoins(bond);
-  const bondProblem = minBond === 0 ? null : bondZat === null ? "Enter an amount like 0.001." : bondZat < minBond ? `Your bond must be at least ${formatCoins(minBond)} TAZ.` : null;
+  const bondZat = minBond;
   const payoutProblem = addressProblem(payout);
-  const ready = title.trim().length >= 3 && priceZat !== null && !priceProblem && !itemProblem && !bondProblem && payout.trim().length > 20 && !payoutProblem && !busy;
+  const ready = title.trim().length >= 3 && priceZat !== null && !priceProblem && !itemProblem && payout.trim().length > 20 && !payoutProblem && !busy;
 
   function pick(next: Kind) {
     setKind(next);
@@ -346,11 +345,10 @@ export default function NewDeal() {
 
           {minBond > 0 && (
             <>
-              <label htmlFor="bond">Your Bond (TAZ)</label>
-              <input id="bond" inputMode="decimal" value={bond} onChange={(e) => setBond(e.target.value)} placeholder={formatCoins(minBond)} />
-              <p className={bondProblem ? "hint error" : "hint"}>
-                {bondProblem ??
-                  `A deposit you make before the deal opens, at least ${formatCoins(minBond)} TAZ. You get it back with your payment, or when the offer runs out. You lose it to the buyer if you don't deliver or lose a dispute. The buyer puts down ${formatCoins(minBond)} TAZ on the same terms.`}
+              <span className="label-like">Your Bond</span>
+              <BondFixed amount={minBond} of="the price" />
+              <p className="hint">
+                {`A deposit you make before the deal opens. You get it back with your payment, or when the offer runs out. You lose it to the buyer if you don't deliver or lose a dispute. The buyer puts down the same ${formatCoins(minBond)} TAZ on the same terms. Anything you send above it comes straight back.`}
               </p>
             </>
           )}

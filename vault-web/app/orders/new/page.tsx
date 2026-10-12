@@ -27,6 +27,7 @@ import {
   toBase64,
   unitLotKey,
 } from "vault-core";
+import BondFixed from "@/app/components/BondFixed";
 import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
 import type { PickedPhoto } from "@/lib/photoClient";
@@ -66,8 +67,7 @@ export default function NewSale() {
   const [disputeIn, setDisputeIn] = useState(86400);
   const [duration, setDuration] = useState(3600);
   const [reveal, setReveal] = useState(15 * 60);
-  // The seller's bond for the whole sale. Empty means "the minimum"; the seller may stake more.
-  const [bond, setBond] = useState("");
+  // The seller's bond for the whole sale is fixed: one unit's bond for each unit.
   const [bondPercent, setBondPercent] = useState(10);
   const [payout, setPayout] = useState("");
   const [busy, setBusy] = useState(false);
@@ -107,10 +107,9 @@ export default function NewSale() {
   const count = unitsProblem ? 0 : units.length;
   const perUnit = priceZat !== null && !priceProblem ? bondFor(priceZat, bondPercent) : 0;
   const minBond = perUnit * Math.max(count, BATCH_MIN_UNITS);
-  const bondZat = bond.trim() === "" ? minBond : parseCoins(bond);
-  const bondProblem = perUnit === 0 ? null : bondZat === null ? "Enter an amount like 0.01." : bondZat < minBond ? `Your bond must be at least ${formatCoins(minBond)} TAZ.` : null;
+  const bondZat = minBond;
   const payoutProblem = addressProblem(payout);
-  const ready = title.trim().length >= 3 && !unitsProblem && priceZat !== null && !priceProblem && !bondProblem && payout.trim().length > 20 && !payoutProblem && !busy;
+  const ready = title.trim().length >= 3 && !unitsProblem && priceZat !== null && !priceProblem && payout.trim().length > 20 && !payoutProblem && !busy;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -316,11 +315,10 @@ export default function NewSale() {
 
           {perUnit > 0 && (
             <>
-              <label htmlFor="bond">Your Bond, For The Whole Sale (TAZ)</label>
-              <input id="bond" inputMode="decimal" value={bond} onChange={(e) => setBond(e.target.value)} placeholder={formatCoins(minBond)} />
-              <p className={bondProblem ? "hint error" : "hint"} id="bond-effect">
-                {bondProblem ??
-                  `A deposit you make before orders open: at least ${formatCoins(perUnit)} TAZ for each unit${count > 0 ? `, ${formatCoins(minBond)} TAZ in all` : ""}. The share of every unit that doesn't sell comes straight back, and each sold unit's share comes back with its payment. You lose a unit's share to its buyer if you don't hand that unit over or lose a dispute about it.`}
+              <span className="label-like">Your Bond, For The Whole Sale</span>
+              <BondFixed amount={minBond} of="the lowest price" each={perUnit} units={Math.max(count, BATCH_MIN_UNITS)} />
+              <p className="hint" id="bond-effect">
+                {`A deposit you make before orders open: ${formatCoins(perUnit)} TAZ for each unit. The share of every unit that doesn't sell comes straight back, and each sold unit's share comes back with its payment. You lose a unit's share to its buyer if you don't hand that unit over or lose a dispute about it. Anything you send above it comes straight back.`}
               </p>
             </>
           )}

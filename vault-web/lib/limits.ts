@@ -34,6 +34,12 @@ export const LIMITS = {
   replyMax: 600,
   /** Delivery: the shortest and longest time limits a seller can set for the handover and for complaints. */
   minDeliverySec: num("VAULT_MIN_DELIVERY_SEC", 3600),
+  /** Physical lots: the shortest time a winner has to complain after "shipped", whatever the seller chose, since a parcel takes days. */
+  minPhysicalComplaintSec: num("VAULT_MIN_PHYSICAL_COMPLAINT_SEC", 7 * 86400),
+  /** A dispute the operator hasn't decided in this time ends as a refund with nobody at fault. */
+  disputeDecideSec: num("VAULT_DISPUTE_DECIDE_SEC", 7 * 86400),
+  /** Evidence photos each side may add to a dispute. */
+  maxEvidencePhotos: 3,
   maxDeliverySec: 30 * 24 * 3600,
   /** An encrypted lot is the content (at most 1 MB) plus a small header and tag. */
   maxLotBytes: 1024 * 1024 + 2048,

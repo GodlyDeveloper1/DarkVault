@@ -4,8 +4,12 @@
 // answers. Scripted, runs in the browser, sends nothing. See lib/guide.ts.
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { PiSpeakerHighBold, PiSpeakerSlashBold } from "react-icons/pi";
 import GuideBot from "./GuideBot";
 import { greeting, match, questionText, replyFor, suggestions, type GuidePage, type Reply } from "@/lib/guide";
+import { chooseSpeed, chooseVoice, hush, localVoice, localVoices, speak, speed, SPEEDS, watchVoices, type Speed } from "@/lib/speech";
+
+const VOICE_KEY = "dv-guide-voice";
 
 type Msg = { id: number; from: "me" | "guide"; text: string; actions?: Reply["actions"]; next?: string[]; done: boolean };
 
@@ -36,8 +40,64 @@ export default function VaultGuide() {
   const list = useRef<HTMLDivElement>(null);
   const timers = useRef<number[]>([]);
   const greeted = useRef("");
+  // Reading aloud: only with a voice that runs on this device (lib/speech.ts).
+  const [canSpeak, setCanSpeak] = useState(false);
+  const [aloud, setAloud] = useState(false);
+  const [speaking, setSpeaking] = useState<number | null>(null);
+  const [voices, setVoices] = useState<string[]>([]);
+  const [voiceName, setVoiceName] = useState("");
+  const [rate, setRate] = useState<Speed>(1.15);
 
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
+
+  useEffect(
+    () =>
+      watchVoices(() => {
+        const v = localVoice();
+        setCanSpeak(v !== null);
+        setVoices(localVoices().map((x) => x.name));
+        setVoiceName(v?.name ?? "");
+        setRate(speed());
+      }),
+    [],
+  );
+  useEffect(() => {
+    try {
+      setAloud(localStorage.getItem(VOICE_KEY) === "on");
+    } catch {
+      /* no storage: off */
+    }
+  }, []);
+  // Closing the panel stops the voice.
+  useEffect(() => {
+    if (!open) {
+      hush();
+      setSpeaking(null);
+    }
+  }, [open]);
+
+  function read(id: number, text: string) {
+    if (speaking === id) {
+      hush();
+      setSpeaking(null);
+      return;
+    }
+    if (speak(text, () => setSpeaking((s) => (s === id ? null : s)))) setSpeaking(id);
+  }
+
+  function toggleAloud() {
+    const on = !aloud;
+    setAloud(on);
+    if (!on) {
+      hush();
+      setSpeaking(null);
+    }
+    try {
+      localStorage.setItem(VOICE_KEY, on ? "on" : "off");
+    } catch {
+      /* fine: on for this page only */
+    }
+  }
 
   // Offer help once per visit, after the visitor has been on an app page for a while.
   useEffect(() => {
@@ -101,13 +161,20 @@ export default function VaultGuide() {
           i = Math.min(full.length, i + step);
           setMsgs((m) => m.map((x) => (x.id === id ? { ...x, text: full.slice(0, i), done: i >= full.length } : x)));
           if (i < full.length) timers.current.push(window.setTimeout(tick, 16));
+          else if (aloudRef.current && speak(full, () => setSpeaking((s) => (s === id ? null : s)))) setSpeaking(id);
         };
         tick();
       }, pause),
     );
   }
 
+  // The latest setting, for the timers above (they were set up before a change).
+  const aloudRef = useRef(aloud);
+  aloudRef.current = aloud && canSpeak;
+
   function ask(text: string, reply: Reply) {
+    hush();
+    setSpeaking(null);
     setMsgs((m) => [...m, { id: nextId.current++, from: "me", text, done: true }]);
     say(reply);
   }
@@ -128,7 +195,7 @@ export default function VaultGuide() {
   }
 
   const last = [...msgs].reverse().find((m) => m.from === "guide");
-  const talking = typing || (!!last && !last.done);
+  const talking = typing || (!!last && !last.done) || speaking !== null;
   const chips = last?.done && last.next?.length ? last.next : suggestions(page);
 
   return (
@@ -157,12 +224,65 @@ export default function VaultGuide() {
             <GuideBot talking={talking} size={46} />
             <div>
               <h3>Vault Guide</h3>
-              <p>Prepared answers, not an AI. It runs in your browser and nothing you type is sent.</p>
+              <p>Prepared answers, not an AI. It runs in your browser and nothing you type is sent.{canSpeak && " Read aloud by your device's own voice."}</p>
             </div>
+            {canSpeak && (
+              <button
+                type="button"
+                className={aloud ? "g-voice on" : "g-voice"}
+                id="guide-voice"
+                onClick={toggleAloud}
+                aria-pressed={aloud}
+                aria-label={aloud ? "Stop reading answers aloud" : "Read answers aloud"}
+                title={aloud ? "Reading answers aloud. Press to stop." : "Read answers aloud, with your device's own voice"}
+              >
+                {aloud ? <PiSpeakerHighBold aria-hidden="true" /> : <PiSpeakerSlashBold aria-hidden="true" />}
+              </button>
+            )}
             <button type="button" className="link" onClick={() => setOpen(false)} aria-label="Close">
               Close
             </button>
           </div>
+
+          {canSpeak && aloud && (
+            <div className="g-voice-bar" id="guide-voice-bar">
+              <span className="g-vb-label">Speed</span>
+              {SPEEDS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  className={rate === s ? "g-speed on" : "g-speed"}
+                  aria-pressed={rate === s}
+                  onClick={() => {
+                    chooseSpeed(s);
+                    setRate(s);
+                  }}
+                >
+                  {s === 1 ? "Normal" : s === 1.15 ? "Faster" : "Fastest"}
+                </button>
+              ))}
+              {voices.length > 1 && (
+                <select
+                  className="g-voice-pick"
+                  aria-label="Voice"
+                  value={voiceName}
+                  onChange={(e) => {
+                    chooseVoice(e.target.value);
+                    setVoiceName(e.target.value);
+                    hush();
+                    setSpeaking(null);
+                    speak("This is how I sound.");
+                  }}
+                >
+                  {voices.map((n) => (
+                    <option key={n} value={n}>
+                      {n.replace(/^Microsoft /, "").replace(/ - .*$/, "")}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
 
           <div className="g-list" ref={list} aria-live="polite" data-lenis-prevent>
             {msgs.map((m) => (
@@ -170,6 +290,12 @@ export default function VaultGuide() {
                 <div className="g-bubble">
                   {m.text}
                   {m.from === "guide" && !m.done && <span className="g-caret" aria-hidden="true" />}
+                  {m.from === "guide" && m.done && canSpeak && (
+                    <button type="button" className={speaking === m.id ? "g-listen on" : "g-listen"} onClick={() => read(m.id, m.text)} aria-label={speaking === m.id ? "Stop" : "Listen"}>
+                      {speaking === m.id ? <PiSpeakerSlashBold aria-hidden="true" /> : <PiSpeakerHighBold aria-hidden="true" />}
+                      {speaking === m.id ? "Stop" : "Listen"}
+                    </button>
+                  )}
                   {m.done && !!m.actions?.length && (
                     <div className="g-actions">
                       {m.actions.map((a) => (

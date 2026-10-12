@@ -1,11 +1,12 @@
 // What the winner does during delivery: send shipping details (sealed to the
-// seller), confirm they have the lot, or complain.
+// seller), confirm they have the lot, or complain. Also: say a parcel hasn't
+// arrived yet (once), accept the seller's offer, add evidence photos.
 //
 // In a batch sale (Order Flow) every winner does this for the unit they won.
 // The request names the sale and the order, as always; which unit that is, is
 // worked out here.
 import { advance, advanceUnit, unitWonBy } from "@/lib/engine";
-import { validEnvelope, winnerConfirm, winnerDispute, winnerShipping } from "@/lib/delivery";
+import { addEvidence, validEnvelope, winnerAcceptOffer, winnerConfirm, winnerDispute, winnerExtend, winnerShipping } from "@/lib/delivery";
 import { bad, clientKey, limited, matches, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
 import { loadAuction, withAuction, withUnit } from "@/lib/store";
@@ -18,7 +19,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const wait = limited("delivery", clientKey(req), 60, 3600_000);
   if (wait) return tooMany(wait, "delivery requests");
   const { id, bid: bidId } = await params;
-  const body = await readJson(req, LIMITS.envelopeMax + 2000);
+  // Room for one evidence photo (300 KB, base64) or an envelope.
+  const body = await readJson(req, 420_000);
   if (!body) return bad("invalid request");
   const token = req.headers.get("x-bid-token");
 
@@ -30,6 +32,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (body.action === "shipping") return { error: validEnvelope(body.envelope) ? winnerShipping(auction, now, body.envelope) : "invalid shipping details" };
     if (body.action === "confirm") return { error: winnerConfirm(auction, now) };
     if (body.action === "dispute") return { error: await winnerDispute(auction, now, { delivery_key: body.delivery_key, lot_key: body.lot_key, listing_key: body.listing_key, reason: body.reason }) };
+    if (body.action === "extend") return { error: winnerExtend(auction, now) };
+    if (body.action === "accept_offer") return { error: winnerAcceptOffer(auction, now, body.percent) };
+    if (body.action === "evidence") return { error: await addEvidence(auction, "winner", body.photo) };
     return { error: "unknown action" };
   };
 

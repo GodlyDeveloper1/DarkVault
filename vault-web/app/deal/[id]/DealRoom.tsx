@@ -24,6 +24,7 @@ import { bidToken, commit, decryptListing, deliveryPublic, formatCoins, manageTo
 import Countdown from "@/app/components/Countdown";
 import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
+import PayLink from "@/app/components/PayLink";
 import { SellerDelivery, WinnerDelivery } from "@/app/auction/[id]/Delivery";
 import { headersOf, inviteFor, inviteHeaders } from "@/lib/invites";
 import { sellerKeyFor } from "@/lib/sellerKey";
@@ -504,9 +505,7 @@ function BondFunding({ bond }: { bond: NonNullable<SellerView["bond"]> }) {
             {bond.address}
           </div>
           <div className="row" style={{ marginTop: 10 }}>
-            <a className="btn primary sm pay-link" href={uri}>
-              Pay From Wallet
-            </a>
+            <PayLink href={uri} />
             <Copy text={bond.address} label="Copy Address" />
           </div>
           <p className="hint" id="bond-received">
@@ -700,9 +699,7 @@ function MyPayment({
             <div className="grow">
               <div className="addr deposit-address">{payTo}</div>
               <div className="row" style={{ marginTop: 10 }}>
-                <a className="btn primary sm pay-link" href={uri}>
-                  Pay From Wallet
-                </a>
+                <PayLink href={uri} />
                 <Copy text={payTo} label="Copy Address" />
                 <Copy text={uri} label="Copy Payment Request" />
               </div>

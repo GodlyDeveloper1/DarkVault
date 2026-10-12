@@ -159,6 +159,36 @@ export async function loadPhoto(id: string, index: number): Promise<Uint8Array |
   }
 }
 
+// --- dispute evidence: <data>/evidence/<record id>.<winner|seller>.<n>.jpg ----
+// Photos either side adds to a dispute, cleaned in their browser. Only the
+// operator can fetch them, and they are deleted once the dispute's payout is made.
+
+const EVIDENCE = path.join(DATA_DIR, "evidence");
+export type Side = "winner" | "seller";
+const evidenceFile = (id: string, side: Side, index: number) => {
+  if (!ID.test(id) || (side !== "winner" && side !== "seller") || !Number.isInteger(index) || index < 0 || index > 9) throw new Error("bad evidence");
+  return path.join(EVIDENCE, `${id}.${side}.${index}.jpg`);
+};
+
+export async function saveEvidence(id: string, side: Side, index: number, bytes: Uint8Array): Promise<void> {
+  await fs.mkdir(EVIDENCE, { recursive: true });
+  await fs.writeFile(evidenceFile(id, side, index), bytes, { flag: "wx" });
+}
+
+export async function loadEvidence(id: string, side: Side, index: number): Promise<Uint8Array | null> {
+  try {
+    return new Uint8Array(await fs.readFile(evidenceFile(id, side, index)));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+}
+
+export async function deleteEvidence(id: string): Promise<void> {
+  for (const side of ["winner", "seller"] as const)
+    for (let i = 0; i < 10; i++) await fs.rm(evidenceFile(id, side, i), { force: true });
+}
+
 // Order Flow: each unit of a batch sale has its own encrypted lot, <data>/lots/<sale id>.u<n>.bin
 
 const unitLotFile = (id: string, index: number) => {

@@ -145,7 +145,9 @@ export function planBatch(saleId: string, depositors: Depositor[], outcome: Batc
  * The seller's bond, shared out after the close. The seller put down one bond
  * for the whole sale; each unit that sold takes an equal share into its own
  * escrow, where it stands behind that one handover. The share of every unit
- * that did not sell, and any odd zatoshis, go straight back to the seller.
+ * that did not sell, anything sent above the bond asked for, and any odd
+ * zatoshis, go straight back to the seller: only the bond asked for is ever at
+ * stake.
  * Everything the bond vault holds is paid out, and every part carries an
  * equal share of the network fee of moving it.
  *
@@ -154,12 +156,20 @@ export function planBatch(saleId: string, depositors: Depositor[], outcome: Batc
  * bonds never take one that small; this is what happens instead of a plan
  * that can't be paid.
  */
-export function planBondSplit(saleId: string, held: number, units: number, sellerAddress: string, escrows: string[]): { to: string; zatoshis: number; memo: string; pays_fee: boolean; unit: number | null }[] {
+export function planBondSplit(
+  saleId: string,
+  held: number,
+  units: number,
+  sellerAddress: string,
+  escrows: string[],
+  /** The bond the seller was asked for, for the whole sale. A unit's share is never more than its part of it: anything above goes back. */
+  asked?: number,
+): { to: string; zatoshis: number; memo: string; pays_fee: boolean; unit: number | null }[] {
   assertAmount(held, "the bond");
   if (!Number.isInteger(units) || units < 1 || escrows.length > units) throw new Error("more units sold than the sale offered");
   if (held === 0) return []; // a sale without bonds: nothing to share out
   const tag = `Dark Vault ${saleId.slice(0, 8)}`;
-  const share = Math.floor(held / units);
+  const share = asked === undefined ? Math.floor(held / units) : Math.min(Math.floor(held / units), Math.floor(asked / units));
   if (escrows.length > 0 && share < FEE_SHARE_FLOOR) {
     if (held < FEE_SHARE_FLOOR) throw new Error("the bond is too small to pay the network fee");
     return [{ to: sellerAddress, zatoshis: held, memo: `${tag}: your bond, returned (it was too small to share between the units)`, pays_fee: true, unit: null }];
@@ -172,7 +182,7 @@ export function planBondSplit(saleId: string, held: number, units: number, selle
     unit,
   }));
   const back = held - share * escrows.length;
-  if (back > 0) out.push({ to: sellerAddress, zatoshis: back, memo: `${tag}: your bond for the units that did not sell, returned`, pays_fee: back >= FEE_SHARE_FLOOR, unit: null });
+  if (back > 0) out.push({ to: sellerAddress, zatoshis: back, memo: `${tag}: your bond for the units that did not sell, and anything you sent above it, returned`, pays_fee: back >= FEE_SHARE_FLOOR, unit: null });
   const paying = out.filter((p) => p.zatoshis > 0);
   if (paying.reduce((s, p) => s + p.zatoshis, 0) !== held) throw new Error("the bond split does not add up to what is held");
   if (!paying.some((p) => p.pays_fee)) throw new Error("the bond is too small to pay the network fee");

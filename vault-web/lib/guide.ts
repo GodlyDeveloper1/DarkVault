@@ -317,7 +317,7 @@ const INTENTS: Intent[] = [
     keys: ["bond", "bonds", "stake", "something to lose", "penalty", "forfeit"],
     reply: {
       text:
-        "Both sides have something to lose. The seller puts down a bond before bidding opens, and every deposit includes one.\n\nA seller who doesn't hand the lot over, or loses a dispute, loses their bond to the winner. A winner who opens a dispute and loses it loses theirs to the seller. A seller and a winner who both do their part get their bonds back in full.",
+        "Both sides have something to lose. The seller puts down a bond before bidding opens, and every deposit includes one. It is fixed: 10% of the price, never under 0.0005 TAZ, the same for both sides.\n\nA seller who doesn't hand the lot over, or loses a dispute, loses their bond to the winner. A winner who opens a dispute and loses it loses theirs to the seller. A seller and a winner who both do their part get their bonds back in full.\n\nOnly the bond asked for is ever at stake. Anything a seller sends above it comes straight back.",
       next: ["deliver", "dispute"],
     },
   },
@@ -337,7 +337,7 @@ const INTENTS: Intent[] = [
     keys: ["dispute", "not as described", "scam", "fake", "wrong item", "never arrived", "did not arrive", "complain", "problem with the lot", "does not deliver", "doesn't deliver", "never delivers", "not deliver", "seller disappears"],
     reply: {
       text:
-        "The winner has a set time after the handover to open a dispute. After that the sale is final.\n\nIn a dispute the site's operator looks at what each side chooses to hand over and decides. If it goes against the seller, the price returns to the winner with the seller's bond. If it goes against the winner, the seller is paid and gets the winner's bond.\n\nIf the lot is never handed over at all, the winner is refunded without having to do anything.",
+        "The winner has a set time after the handover to open a dispute. After that the sale is final. A parcel always gets at least a week, and the winner can press Not Arrived Yet once to add the same time again.\n\nIn a dispute, both sides can add up to three photos for the operator, cleaned in their browser. The seller can also offer part of the price back: if the winner accepts, it ends there, with nobody at fault.\n\nOtherwise the operator decides: the price to the seller, back to the winner, or split between them. Whoever is found at fault loses their bond to the other side. If the operator hasn't decided within a week, the price goes back and both bonds too, so nobody's money can be stuck.\n\nIf the lot is never handed over at all, the winner is refunded without having to do anything.",
       next: ["bond", "deliver"],
     },
   },
@@ -372,6 +372,16 @@ const INTENTS: Intent[] = [
         "Open the dashboard and use Clear This Browser, under Move To Another Browser. It removes your bids, seller keys, invites, saved refund address and practice wallet from this browser.\n\nSaving a vault file first is optional. With one, you can restore everything later, here or in another browser. Without one, it is gone for good.\n\nMoney is never kept in the browser, so clearing touches nothing you paid: refunds and payouts still go to the addresses you gave. What you lose is the key to open your bids, unlock what you won, confirm a handover, or hand over what you sell.",
       next: ["move", "seats"],
       actions: [{ label: "Open Clear This Browser", href: "/dashboard#move-clear" }],
+    },
+  },
+  {
+    id: "voice",
+    q: "Can you read the answers aloud?",
+    keys: ["voice", "read aloud", "aloud", "speak", "speech", "listen", "audio", "talk to me", "hear"],
+    reply: {
+      text:
+        "Yes. Press the speaker at the top of this panel, or Listen under any answer.\n\nOnly a voice that runs on your own device is used. Some browsers also offer voices that are spoken by a server, which would send the text away, so those are never chosen. If your device has no voice of its own, the speaker isn't shown.\n\nThere is no microphone: speech recognition in Chrome and Edge sends your recording to a server.",
+      next: ["sees", "limits"],
     },
   },
   {

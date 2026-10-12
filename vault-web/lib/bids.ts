@@ -6,6 +6,7 @@ import { LIMITS } from "./limits";
 import { moneyByBid } from "./engine";
 import { seatsOf } from "./seats";
 import { checkAddress, newDepositAddress, SignerError, vaultInfo } from "./signer";
+import { isSiteAddress, OWN_ADDRESS } from "./siteAddresses";
 import { siteKey } from "./sitekey";
 import { loadAuction, withAuction } from "./store";
 
@@ -40,6 +41,7 @@ export async function placeBid(id: string, b: NewBid): Promise<Placed> {
       return { error: "this bid is not locked to this auction's close; please reload the page" };
   }
 
+  if (await isSiteAddress(b.refund)) return { error: `refund address: ${OWN_ADDRESS}` };
   try {
     const check = await checkAddress(b.refund);
     if (!check.ok) return { error: `refund address: ${check.reason}` };

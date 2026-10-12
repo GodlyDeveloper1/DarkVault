@@ -29,6 +29,7 @@ import {
   type LotHeader,
 } from "vault-core";
 import { inviteFor } from "@/lib/invites";
+import { DecideBy, EvidencePhotos, SellerOffer, WinnerOffer } from "./DisputeTools";
 import { tokenOf, type Ticket } from "@/lib/tickets";
 import type { BidView, PublicAuction, SellerView } from "@/lib/views";
 
@@ -68,6 +69,8 @@ const whyWinner = (t: Words): Record<string, string> => ({
   "wrong-key": `The key that was delivered does not open the ${t.lot}.`,
   "key-was-right": `The check showed the delivered key opens the ${t.lot}.`,
   operator: "The operator decided the dispute.",
+  agreed: "You accepted the seller's offer.",
+  "operator-timeout": "The operator did not decide in time, so the dispute ended with nobody at fault.",
 });
 const whySeller = (t: Words): Record<string, string> => ({
   confirmed: `The ${t.winner} confirmed they have the ${t.lot}.`,
@@ -78,12 +81,15 @@ const whySeller = (t: Words): Record<string, string> => ({
   "wrong-key": `The key that was delivered does not open the ${t.lot}.`,
   "key-was-right": `A dispute was opened, and the check showed the delivered key opens the ${t.lot}.`,
   operator: "The operator decided the dispute.",
+  agreed: `The ${t.winner} accepted your offer.`,
+  "operator-timeout": "The operator did not decide in time, so the dispute ended with nobody at fault.",
 });
 
-type Resolution = { decision: string; reason: string; fault: string };
+type Resolution = { decision: string; reason: string; fault: string; winner_percent?: number | null };
 
 /** What the outcome means for the winner's money, bonds included. */
 function winnerOutcome(r: Resolution, bonds: boolean): string {
+  if (r.decision === "split") return `The price was shared: ${r.winner_percent}% of it comes back to you${bonds ? ", with your bond" : ""}.`;
   if (r.decision === "release") {
     if (!bonds) return "Your payment went to the seller.";
     return r.fault === "winner" ? "Your payment went to the seller, and so did your bond." : "Your payment went to the seller. Your bond comes back to you.";
@@ -96,6 +102,7 @@ function winnerOutcome(r: Resolution, bonds: boolean): string {
 
 /** What the outcome means for the seller's money, bonds included. */
 function sellerOutcome(r: Resolution, bonds: boolean, t: Words): string {
+  if (r.decision === "split") return `The price was shared: ${100 - (r.winner_percent ?? 0)}% of it is released to you${bonds ? ", with your bond" : ""}.`;
   if (r.decision === "release") {
     if (!bonds) return "The price is released to you.";
     return r.fault === "winner" ? `The price is released to you, with your bond and the ${t.winner}'s bond.` : "The price is released to you, with your bond.";
@@ -209,6 +216,19 @@ export function SellerDelivery({
     }
   }
 
+  /** One request about this dispute; says whether it went through. */
+  async function send(body: Record<string, unknown>): Promise<boolean> {
+    setError(null);
+    try {
+      await post(url, { "x-manage-key": token }, body);
+      refresh();
+      return true;
+    } catch (e) {
+      setError(message(e));
+      return false;
+    }
+  }
+
   async function answer() {
     setBusy(true);
     setError(null);
@@ -300,7 +320,7 @@ export function SellerDelivery({
             </p>
           )}
           <p className="small muted" style={{ margin: "8px 0 0" }}>
-            The price stays held until the operator decides.
+            The price stays held until the operator decides, or until you and the {t.winner} settle it.
             {d.dispute.kind === "not-as-described" && ` The operator can open the ${t.lot} you delivered and compare it with your description.`}
             {d.seller_bond > 0 && " Whoever loses the dispute also loses their bond to the other side."}
           </p>
@@ -319,12 +339,19 @@ export function SellerDelivery({
               </div>
             </>
           )}
+          {d.dispute.kind !== "wrong-key" && (
+            <>
+              <EvidencePhotos count={d.dispute.evidence?.seller ?? 0} send={send} field="evidence" extra={which} id={unit ? `seller-evidence-u${unit.number}` : "seller-evidence"} />
+              <SellerOffer current={d.dispute.offer_percent ?? null} send={send} extra={which} who={t.winner} id={unit ? `seller-offer-u${unit.number}` : "seller-offer"} />
+              <DecideBy at={d.dispute.decide_by} />
+            </>
+          )}
         </div>
       )}
 
       {d.resolution && (
         <p className="small seller-resolution" id={unit ? undefined : "seller-resolution"}>
-          <strong className={d.resolution.decision === "release" ? "ok" : "error"}>{sellerOutcome(d.resolution, d.seller_bond + d.buyer_bond > 0, t)}</strong>{" "}
+          <strong className={d.resolution.decision === "release" || d.resolution.decision === "split" ? "ok" : "error"}>{sellerOutcome(d.resolution, d.seller_bond + d.buyer_bond > 0, t)}</strong>{" "}
           {d.kind === "digital" && d.resolution.reason === "no-complaint"
             ? `The ${t.winner} unlocked nothing or said nothing within the time limit.`
             : promise && d.resolution.reason === "no-shipping-details"
@@ -599,6 +626,10 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
             <strong>{promise ? "The seller says it is done." : "The seller has shipped it."}</strong>{" "}
             {promise ? "Confirm once you have seen it." : "Confirm when it arrives."} You have until {when(d.dispute_by)} to open a dispute if
             something is wrong. After that the {t.sale} is final.
+            {d.kind === "physical" &&
+              (d.extended_at
+                ? " You have already added more time once."
+                : " Parcels can be slow: if it hasn't arrived, press Not Arrived Yet once to add the same time again.")}
           </p>
           {stakes}
           {note && (
@@ -613,6 +644,11 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           <button className="primary" id="confirm-received" disabled={busy} onClick={() => void act({ action: "confirm" })}>
             {promise ? "It has been done" : "I have received it"}
           </button>
+          {d.kind === "physical" && d.stage === "awaiting-confirmation" && !d.extended_at && (
+            <button type="button" id="not-arrived" disabled={busy} onClick={() => void act({ action: "extend" })} title="Adds more time to wait for the parcel, once">
+              Not Arrived Yet: Add Time
+            </button>
+          )}
           {d.stage === "awaiting-confirmation" && (
             <button type="button" id="complain" onClick={() => setComplaining(true)}>
               Something is wrong
@@ -650,19 +686,26 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
       {d.stage === "disputed" && (
         <div id="dispute-open">
           <p className="small">
-            <strong>Your dispute is open.</strong> Your payment stays held until the operator decides.
+            <strong>Your dispute is open.</strong> Your payment stays held until the operator decides, or until you accept an offer from the seller.
           </p>
           {d.dispute?.seller_reply && (
             <p className="small" style={{ whiteSpace: "pre-wrap" }} id="seller-reply">
               <strong>The seller answered:</strong> &ldquo;{d.dispute.seller_reply}&rdquo;
             </p>
           )}
+          {d.dispute && d.dispute.kind !== "wrong-key" && (
+            <>
+              {d.dispute.offer_percent !== null && <WinnerOffer percent={d.dispute.offer_percent} send={act} id="winner-offer" />}
+              <EvidencePhotos count={d.dispute.evidence?.winner ?? 0} send={act} field="photo" id="winner-evidence" />
+              <DecideBy at={d.dispute.decide_by} />
+            </>
+          )}
         </div>
       )}
 
       {d.resolution && (
         <p className="small" id="winner-resolution">
-          <strong className={d.resolution.decision === "refund" ? "ok" : undefined}>{winnerOutcome(d.resolution, d.seller_bond + d.buyer_bond > 0)}</strong>{" "}
+          <strong className={d.resolution.decision === "refund" || d.resolution.decision === "split" ? "ok" : undefined}>{winnerOutcome(d.resolution, d.seller_bond + d.buyer_bond > 0)}</strong>{" "}
           {promise && d.resolution.reason === "no-shipping-details"
             ? "You did not say what you wanted in time."
             : promise && d.resolution.reason === "confirmed"

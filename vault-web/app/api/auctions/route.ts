@@ -8,6 +8,7 @@ import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
 import { createListing } from "@/lib/listing";
 import { checkAddress, SignerError } from "@/lib/signer";
+import { isSiteAddress, OWN_ADDRESS } from "@/lib/siteAddresses";
 import { listAuctions } from "@/lib/store";
 import type { Delivery } from "@/lib/types";
 import { infosFor, listed, listedSales, publicView } from "@/lib/views";
@@ -146,10 +147,12 @@ export async function POST(req: Request) {
     const within = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= LIMITS.minDeliverySec && v <= LIMITS.maxDeliverySec;
     if (!within(d.deliver_seconds) || !within(d.dispute_seconds))
       return bad(`delivery time limits are between ${Math.ceil(LIMITS.minDeliverySec / 60)} minutes and ${LIMITS.maxDeliverySec / 86400} days`);
-    // Bonds. The buyer's is fixed by the reserve; the seller may stake more than the minimum, never less.
+    // Bonds are fixed, the same rule for both sides: 10% of the reserve (a
+    // deal's price, a batch sale's lowest unit price), never under MIN_BOND.
+    // A seller can't choose a bigger or smaller one; a seller_bond sent with
+    // the listing is ignored. A batch sale's seller puts down one bond per unit.
     const minBond = typeof reserve === "number" ? bondFor(reserve, LIMITS.bondPercent) : 0;
-    // A batch sale's seller puts down one bond per unit, all at once.
-    const sellerBond = d.seller_bond === undefined ? minBond * units : d.seller_bond;
+    const sellerBond = minBond * units;
     if (minBond > LIMITS.maxSellerBond) return bad(`the ${deal ? "price" : batch ? "lowest price" : "reserve"} is higher than this site takes: its bond would be more than ${LIMITS.maxSellerBond} zatoshis`);
     if (typeof sellerBond !== "number" || !Number.isSafeInteger(sellerBond) || sellerBond < minBond * units)
       return bad(`the seller's bond must be at least ${minBond * units} zatoshis`);
@@ -180,6 +183,7 @@ export async function POST(req: Request) {
 
   if (batch && !delivery) return bad("a batch sale needs its handover time limits");
 
+  if (await isSiteAddress(payout)) return bad(`payout address: ${OWN_ADDRESS}`);
   try {
     const check = await checkAddress(payout);
     if (!check.ok) return bad(`payout address: ${check.reason}`);

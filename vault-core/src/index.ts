@@ -412,6 +412,17 @@ export interface EscrowHeld {
   sellerBond: number;
   /** The part that is the winner's bond. The rest of the total is the price. */
   buyerBond: number;
+  /**
+   * What the seller sent above the bond they were asked for. Never at stake:
+   * it goes back to the seller however the sale ends. Not part of the price.
+   */
+  sellerExtra?: number;
+  /**
+   * A split decision only: the percentage of the price (1 to 99) that goes
+   * back to the winner. The rest of the price goes to the seller. Nobody is
+   * at fault in a split: each side's bond goes back to its owner.
+   */
+  winnerPercent?: number;
 }
 
 /**
@@ -429,7 +440,7 @@ export interface EscrowHeld {
 export function planEscrowPayout(
   auctionId: string,
   held: EscrowHeld,
-  decision: "release" | "refund" | "return-bond",
+  decision: "release" | "refund" | "return-bond" | "split",
   fault: Fault,
   sellerAddress: string,
   winner?: { bidId: string; refundAddress: string },
@@ -437,7 +448,9 @@ export function planEscrowPayout(
   assertAmount(held.total, "the held amount");
   assertAmount(held.sellerBond, "the seller's bond");
   assertAmount(held.buyerBond, "the winner's bond");
-  const price = held.total - held.sellerBond - held.buyerBond;
+  const extra = held.sellerExtra ?? 0;
+  assertAmount(extra, "the seller's extra");
+  const price = held.total - held.sellerBond - held.buyerBond - extra;
   if (price < 0) throw new Error("the bonds add up to more than the escrow vault holds");
   const tag = `Dark Vault ${auctionId.slice(0, 8)}`;
 
@@ -451,9 +464,20 @@ export function planEscrowPayout(
     toWinner = 0;
     sellerMemo = `${tag}: your bond, returned`;
     winnerMemo = "";
+  } else if (decision === "split") {
+    // The two sides share the price (agreed between them, or decided by the
+    // operator). Nobody is at fault: each bond goes back to its owner.
+    const pct = held.winnerPercent;
+    if (fault !== "none") throw new Error("nobody is at fault in a split");
+    if (pct === undefined || !Number.isInteger(pct) || pct < 1 || pct > 99) throw new Error("a split gives the winner 1% to 99% of the price");
+    const back = Math.floor((price * pct) / 100);
+    toWinner = back + held.buyerBond;
+    toSeller = held.total - toWinner;
+    winnerMemo = `${tag}: the price was shared. Your ${pct}% of it, and your bond, returned.`;
+    sellerMemo = `${tag}: the price was shared. Your ${100 - pct}% of it${held.sellerBond ? ", and your bond" : ""}.`;
   } else if (decision === "release") {
     if (fault === "seller") throw new Error("the price can't be released to a seller who is at fault");
-    toSeller = price + held.sellerBond + (fault === "winner" ? held.buyerBond : 0);
+    toSeller = price + held.sellerBond + extra + (fault === "winner" ? held.buyerBond : 0);
     toWinner = fault === "winner" ? 0 : held.buyerBond;
     sellerMemo = `${tag}: sale proceeds${held.sellerBond ? " and your bond" : ""}${fault === "winner" && held.buyerBond ? ", and the winner's bond (they lost the dispute)" : ""}`;
     winnerMemo = `${tag}: your bond, returned`;
@@ -461,13 +485,18 @@ export function planEscrowPayout(
     toWinner = price + (fault === "winner" ? 0 : held.buyerBond) + (fault === "seller" ? held.sellerBond : 0);
     toSeller = held.total - toWinner;
     winnerMemo = `${tag}: the sale was undone. This is your payment, returned${fault === "seller" && held.sellerBond ? ", with the seller's bond" : ""}.`;
-    sellerMemo = fault === "winner" ? `${tag}: the sale was undone. Your bond, returned, with the winner's bond.` : `${tag}: the sale was undone. Your bond, returned.`;
+    sellerMemo =
+      fault === "winner"
+        ? `${tag}: the sale was undone. Your bond, returned, with the winner's bond.`
+        : fault === "seller" && held.sellerBond
+          ? `${tag}: the sale was undone. What you sent above your bond, returned.`
+          : `${tag}: the sale was undone. Your bond, returned.`;
   }
 
   // The network fee is carried by whoever receives the price. A bond going
   // back to its owner, or to the other side, arrives in full. With no price to
   // pay out (a bond returned on its own), that one payment carries the fee.
-  const priceToSeller = decision !== "refund";
+  const priceToSeller = decision === "split" ? toSeller >= toWinner : decision !== "refund";
   const both = toSeller > 0 && toWinner > 0;
   const payments: PlannedPayment[] = [];
   if (toSeller > 0) payments.push({ kind: "seller", to: sellerAddress, zatoshis: toSeller, memo: sellerMemo, pays_fee: !both || priceToSeller });

@@ -51,6 +51,7 @@ import {
 import Countdown from "@/app/components/Countdown";
 import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
+import PayLink from "@/app/components/PayLink";
 import { SeatsFull, seatsLeft, SeatsStat, stateLabel } from "@/app/components/AuctionTile";
 import { loadTickets, mayOpenByHand, parseTicketFile, saveTicket, ticketFile, tokenOf, WALLET_EVENT, type Ticket } from "@/lib/tickets";
 import { inviteFor, inviteHeaders, shareLink } from "@/lib/invites";
@@ -545,7 +546,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
               Here the seller is this site, so nobody puts down a bond.{" "}
               {auction.delivery.usual_bond_percent > 0 ? (
                 <>
-                  In a real auction both sides do: the seller pays in at least {auction.delivery.usual_bond_percent}% of the reserve before bidding
+                  In a real auction both sides do: the seller pays in {auction.delivery.usual_bond_percent}% of the reserve before bidding
                   opens, and every bid carries the same amount on top. A seller who doesn&apos;t deliver, or loses a dispute, loses their bond to
                   the winner. A winner who opens a dispute and loses it loses theirs to the seller. Honest parties get theirs back.
                 </>
@@ -805,9 +806,7 @@ function BondFunding({ bond }: { bond: NonNullable<SellerView["bond"]> }) {
         <div className="grow">
           <div className="addr" id="bond-address">{bond.address}</div>
           <div className="row" style={{ marginTop: 10 }}>
-            <a className="btn primary sm pay-link" href={uri}>
-              Pay from wallet
-            </a>
+            <PayLink href={uri} />
             <Copy text={bond.address} label="Copy address" />
           </div>
           <p className="hint" id="bond-received">
@@ -1298,9 +1297,7 @@ function MyBid({
             <div className="grow">
               <div className="addr deposit-address">{payTo}</div>
               <div className="row" style={{ marginTop: 10 }}>
-                <a className="btn primary sm pay-link" href={uri}>
-                  Pay from wallet
-                </a>
+                <PayLink href={uri} />
                 <Copy text={payTo} label="Copy address" />
                 <Copy text={uri} label="Copy payment request" />
               </div>

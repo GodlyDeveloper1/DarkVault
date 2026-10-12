@@ -47,6 +47,7 @@ import {
 import Countdown from "@/app/components/Countdown";
 import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
+import PayLink from "@/app/components/PayLink";
 import { saleLabel, unitsWord } from "@/app/components/SaleTile";
 import { SeatsFull, seatsLeft, SeatsStat } from "@/app/components/AuctionTile";
 import { SellerDelivery, WinnerDelivery } from "@/app/auction/[id]/Delivery";
@@ -648,9 +649,7 @@ function BondFunding({ bond, units }: { bond: NonNullable<SellerView["bond"]>; u
             {bond.address}
           </div>
           <div className="row" style={{ marginTop: 10 }}>
-            <a className="btn primary sm pay-link" href={uri}>
-              Pay From Wallet
-            </a>
+            <PayLink href={uri} />
             <Copy text={bond.address} label="Copy Address" />
           </div>
           <p className="hint" id="bond-received">
@@ -914,9 +913,7 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
             <div className="grow">
               <div className="addr deposit-address">{payTo}</div>
               <div className="row" style={{ marginTop: 10 }}>
-                <a className="btn primary sm pay-link" href={uri}>
-                  Pay From Wallet
-                </a>
+                <PayLink href={uri} />
                 <Copy text={payTo} label="Copy Address" />
                 <Copy text={uri} label="Copy Payment Request" />
               </div>

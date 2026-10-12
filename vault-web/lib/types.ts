@@ -105,6 +105,8 @@ export type ResolutionReason =
   | "key-was-right" // digital dispute: it does
   | "as-described" // the winner said the lot is what was described
   | "operator" // a dispute decided by the operator
+  | "operator-timeout" // the operator didn't decide in time: the price goes back, nobody at fault
+  | "agreed" // the seller offered part of the price back and the winner accepted
   | "not-sold"; // nothing was sold: the seller's bond goes back
 
 /**
@@ -158,6 +160,8 @@ export interface Delivery {
   handover?: { at: number; envelope?: string };
   /** The winner must confirm or complain by this time. */
   dispute_by?: number;
+  /** Physical: the winner said the parcel hasn't arrived yet, once, which added another complaint window. */
+  extended_at?: number;
   confirmed_at?: number;
   dispute?: {
     at: number;
@@ -171,8 +175,13 @@ export interface Delivery {
     listing_key?: string;
     /** The seller's answer to the complaint. */
     seller_reply?: { at: number; text: string };
+    /** The seller offers this percentage of the price back (1 to 100). The winner may accept it; the seller may change it until then. */
+    offer?: { at: number; percent: number };
+    /** How many evidence photos each side has added (stored in <data>/evidence/, seen only by the operator, deleted after the payout). */
+    evidence?: { winner: number; seller: number };
   };
-  resolution?: { decision: "release" | "refund" | "return-bond"; reason: ResolutionReason; fault: Fault; at: number };
+  /** `winner_percent`: a split only, the share of the price that goes back to the winner. */
+  resolution?: { decision: "release" | "refund" | "return-bond" | "split"; reason: ResolutionReason; fault: Fault; at: number; winner_percent?: number };
   /** PRIVATE txid. The second payout: everything in escrow, to the seller, the winner or both. */
   payout?: {
     txid: string;
