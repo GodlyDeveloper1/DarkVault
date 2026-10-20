@@ -36,8 +36,19 @@ export const LIMITS = {
   minDeliverySec: num("VAULT_MIN_DELIVERY_SEC", 3600),
   /** Physical lots: the shortest time a winner has to complain after "shipped", whatever the seller chose, since a parcel takes days. */
   minPhysicalComplaintSec: num("VAULT_MIN_PHYSICAL_COMPLAINT_SEC", 7 * 86400),
-  /** A dispute the operator hasn't decided in this time ends as a refund with nobody at fault. */
-  disputeDecideSec: num("VAULT_DISPUTE_DECIDE_SEC", 7 * 86400),
+  /** A dispute that isn't decided in this time ends with everyone's own money going back to them. Pushed back by a later request for proof. */
+  disputeDecideSec: num("VAULT_DISPUTE_DECIDE_SEC", 72 * 3600),
+  /** How long a side has to answer the site's request for proof. Silence loses the dispute. */
+  proofSec: num("VAULT_PROOF_SEC", 48 * 3600),
+  /** Physical: "Not Arrived Yet" adds this much time to the complaint window, once. */
+  extendSec: num("VAULT_EXTEND_SEC", 3 * 86400),
+  /** Digital: once the winner can read the lot, how long they have to say it is not what was described. */
+  digitalComplaintSec: num("VAULT_DIGITAL_COMPLAINT_SEC", 2 * 3600),
+  proofTextMax: 600,
+  /** A return: the seller's time to give a return address, the buyer's to post it back, the seller's to confirm it arrived. */
+  returnAddressSec: num("VAULT_RETURN_ADDRESS_SEC", 48 * 3600),
+  returnSendSec: num("VAULT_RETURN_SEND_SEC", 5 * 86400),
+  returnConfirmSec: num("VAULT_RETURN_CONFIRM_SEC", 7 * 86400),
   /** Evidence photos each side may add to a dispute. */
   maxEvidencePhotos: 3,
   maxDeliverySec: 30 * 24 * 3600,
@@ -62,6 +73,8 @@ export const LIMITS = {
   maxPlacedBids: num("VAULT_MAX_BIDS", 120),
   /** A deal has one buyer: this many payment addresses at most are made for one deal. */
   maxDealAcceptances: 5,
+  /** Wrong deal codes before a deal stops taking payments (the seller makes a new one). */
+  maxDealCodeMisses: 10,
   /** How long a deal's offer can stand. */
   maxDealOfferSec: 30 * 24 * 3600,
   /**

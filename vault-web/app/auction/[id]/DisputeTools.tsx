@@ -1,11 +1,14 @@
 "use client";
 
 // The tools either side has while a dispute is open, for every market:
-//   - evidence photos for the operator (cleaned in this browser first, like
-//     listing photos: no location, device or time survives the redraw);
-//   - the seller's offer of part of the price back, and the winner accepting it,
-//     which ends the dispute without the operator;
-//   - when the dispute ends by itself if the operator never decides.
+//   - the site's request for proof, with its deadline, and the answer box
+//     (silence loses the dispute);
+//   - evidence photos (cleaned in this browser first, like listing photos: no
+//     location, device or time survives the redraw);
+//   - when the dispute ends by itself if it is never decided.
+// One side wins the whole dispute. There are no offers and no splits.
+// To both sides it is "the site" that asks and decides.
+import Link from "next/link";
 import { useState } from "react";
 import { toBase64 } from "vault-core";
 import { redrawPhoto } from "@/lib/photoClient";
@@ -17,7 +20,7 @@ const when = (t: number | null | undefined) =>
 
 type Send = (body: Record<string, unknown>) => Promise<boolean>;
 
-/** Up to three photos for the operator. `field` is how the route names the photo ("photo" for the winner, "evidence" for the seller). */
+/** Up to three photos for the site. `field` is how the route names the photo ("photo" for the winner, "evidence" for the seller). */
 export function EvidencePhotos({ count, send, field, extra, id }: { count: number; send: Send; field: "photo" | "evidence"; extra?: Record<string, unknown>; id: string }) {
   const [working, setWorking] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -40,10 +43,11 @@ export function EvidencePhotos({ count, send, field, extra, id }: { count: numbe
   return (
     <div className="evidence" id={id}>
       <p className="small" style={{ margin: "12px 0 6px" }}>
-        <strong>Photos For The Operator</strong> <span className="muted">({count} of {MAX} added)</span>
+        <strong>Your Photos</strong> <span className="muted">({count} of {MAX} added)</span>
       </p>
       <p className="hint" style={{ marginTop: 0 }}>
-        What arrived, the packaging, a receipt of posting. Only the operator sees them, and they are deleted once the dispute is paid out. Your
+        What arrived, the packaging, a receipt of posting, an error on screen. Only the site sees them, never the other side, and they are deleted
+        once the dispute is paid out. Your
         browser removes the location, device and time from each photo before it is sent. Cover any name or address label first.
       </p>
       {left > 0 && (
@@ -67,87 +71,91 @@ export function EvidencePhotos({ count, send, field, extra, id }: { count: numbe
   );
 }
 
-/** The seller offers part of the price back. They can change it, or withdraw it, until the winner accepts. */
-export function SellerOffer({ current, send, extra, who, id }: { current: number | null; send: Send; extra?: Record<string, unknown>; who: string; id: string }) {
-  const [pct, setPct] = useState(current ?? 50);
+export interface ProofAsk {
+  side: "winner" | "seller";
+  at: number;
+  due: number;
+  text: string;
+  answered_at: number | null;
+}
+
+/**
+ * The site's requests for proof to this side: the one waiting for an answer,
+ * with its deadline and the answer box, and the ones already answered.
+ */
+export function ProofRequests({ requests, side, send, extra, id }: { requests: ProofAsk[]; side: "winner" | "seller"; send: Send; extra?: Record<string, unknown>; id: string }) {
+  const mine = requests.filter((r) => r.side === side);
+  const open = mine.find((r) => r.answered_at === null);
+  const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const go = async (offer: number) => {
-    setBusy(true);
-    await send({ offer, ...extra });
-    setBusy(false);
-  };
+  if (mine.length === 0) return null;
+  const late = open ? Date.now() > open.due : false;
   return (
-    <div className="offer-box" id={id}>
-      <p className="small" style={{ margin: "12px 0 6px" }}>
-        <strong>Settle It Yourselves</strong>
-      </p>
-      <p className="hint" style={{ marginTop: 0 }}>
-        Offer the {who} part of the price back. If they accept, the dispute ends at once, without the operator: they get that share back, you get the
-        rest, and both bonds go back to their owners. 100% is a full refund, with your bond kept.
-      </p>
-      {current !== null && (
-        <p className="small offer-standing">
-          You offer <strong>{current}%</strong> of the price back. The {who} has not accepted yet.
+    <div className="proof-box" id={id}>
+      {open ? (
+        <div className={`card ${late ? "bad" : "accent"} proof-ask`}>
+          <p className="proof-from">
+            <strong>Dark Vault Needs Proof</strong>
+          </p>
+          <p className="small" style={{ margin: "6px 0 0", whiteSpace: "pre-wrap" }}>
+            {open.text}
+          </p>
+          <p className="small proof-due">
+            {late ? (
+              <strong>The time to answer has passed.</strong>
+            ) : (
+              <>
+                Answer by <strong>{when(open.due)}</strong>. If nothing arrives by then, this dispute is decided against you.
+              </>
+            )}
+          </p>
+          {!late && (
+            <>
+              <label htmlFor={`${id}-text`}>Your Answer</label>
+              <textarea
+                id={`${id}-text`}
+                className="proof-text"
+                value={text}
+                maxLength={600}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="What happened, and what your photos show. Add your photos below too."
+              />
+              <div className="row" style={{ marginTop: 10 }}>
+                <button
+                  className="primary send-proof"
+                  disabled={busy || text.trim().length < 10}
+                  onClick={() => {
+                    setBusy(true);
+                    void send({ ...(side === "winner" ? { action: "proof", text } : { proof: text }), ...extra })
+                      .then((ok) => ok && setText(""))
+                      .finally(() => setBusy(false));
+                  }}
+                >
+                  {busy ? "Sending…" : "Send My Proof"}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ) : (
+        <p className="small proof-sent">
+          <strong className="ok">Your proof was sent</strong> on {when(mine[mine.length - 1]!.answered_at)}. The site will decide, or ask you for more.
         </p>
       )}
-      <div className="row offer-row">
-        <input
-          type="number"
-          min={1}
-          max={100}
-          step={1}
-          inputMode="numeric"
-          className="offer-pct"
-          aria-label="Percent of the price to give back"
-          value={pct}
-          onChange={(e) => setPct(Math.max(1, Math.min(100, Math.round(Number(e.target.value) || 1))))}
-        />
-        <span className="small muted">% of the price</span>
-        <button className="primary sm" disabled={busy || pct === current} onClick={() => void go(pct)}>
-          {current === null ? `Offer ${pct}% Back` : `Change To ${pct}%`}
-        </button>
-        {current !== null && (
-          <button className="sm" disabled={busy} onClick={() => void go(0)}>
-            Withdraw The Offer
-          </button>
-        )}
-      </div>
     </div>
   );
 }
 
-/** The winner sees the seller's offer and may accept it. */
-export function WinnerOffer({ percent, send, id }: { percent: number; send: Send; id: string }) {
-  const [busy, setBusy] = useState(false);
-  return (
-    <div className="card accent offer-made" id={id} style={{ margin: "12px 0 0" }}>
-      <strong>The seller offers {percent}% of the price back.</strong>
-      <p className="small" style={{ margin: "6px 0 10px" }}>
-        {percent === 100
-          ? "That is a full refund. If you accept, the dispute ends now: your payment and your bond come back, and nobody is at fault."
-          : `If you accept, the dispute ends now, without the operator: ${percent}% of the price and your bond come back to you, and the seller keeps the rest. Nobody is at fault.`}
-      </p>
-      <button
-        className="primary"
-        disabled={busy}
-        onClick={() => {
-          setBusy(true);
-          void send({ action: "accept_offer", percent }).finally(() => setBusy(false));
-        }}
-      >
-        Accept {percent}% Back
-      </button>
-    </div>
-  );
-}
-
-/** Said to both sides: the operator can't sit on a dispute for ever. */
+/** Said to both sides: nobody can sit on a dispute for ever. */
 export function DecideBy({ at }: { at: number | null | undefined }) {
   if (!at) return null;
   return (
     <p className="small muted decide-by">
-      If the operator has not decided by {when(at)}, the price goes back to the buyer and both bonds go back to their owners. Nobody&apos;s money
-      can be stuck.
+      If it is not decided by {when(at)}, everyone&apos;s own money goes back: the price to the buyer, and each bond to its owner. Nobody&apos;s
+      money can be stuck.{" "}
+      <Link href="/rules" target="_blank" className="dispute-rules-link">
+        Read The Dispute Rules
+      </Link>
     </p>
   );
 }

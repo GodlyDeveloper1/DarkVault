@@ -18,7 +18,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "../datadir";
 import { matches, sha256Hex } from "../http";
-import { loadAuction } from "../store";
+import { loadAuction, replaceFile } from "../store";
 import { HOUSE, walletStart } from "./config";
 import { today, withPurse } from "./purse";
 
@@ -48,9 +48,7 @@ async function read(id: string): Promise<PracticeWallet | null> {
 
 async function write(wallet: PracticeWallet): Promise<void> {
   await fs.mkdir(DIR, { recursive: true });
-  const tmp = `${fileFor(wallet.id)}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(wallet, null, 1), "utf8");
-  await fs.rename(tmp, fileFor(wallet.id));
+  await replaceFile(fileFor(wallet.id), JSON.stringify(wallet, null, 1));
 }
 
 /**

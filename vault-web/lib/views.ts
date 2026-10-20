@@ -3,7 +3,7 @@
 // through one of these three functions.
 import "server-only";
 import { boardStatusOf, isPublicBeacon, roundTimeMs } from "vault-core";
-import { complaintSeconds, deliveryStage } from "./delivery";
+import { complaintSeconds, decideBy, deliveryStage, digitalComplainBy } from "./delivery";
 import { moneyByBid, requiredDeposit, unitFinished, unitsOf } from "./engine";
 import { HOUSE } from "./house/config";
 import { LIMITS } from "./limits";
@@ -75,15 +75,39 @@ function deliveryCommon(auction: Auction, escrow: VaultInfo | null) {
           reason: d.dispute.reason ?? null,
           verdict: d.dispute.verdict ?? null,
           seller_reply: d.dispute.seller_reply?.text ?? null,
-          /** The seller's standing offer: this percentage of the price back to the winner, if they accept. */
-          offer_percent: d.dispute.offer?.percent ?? null,
+          /**
+           * The site's requests for proof, to either side, with their deadlines.
+           * Each side's page shows its own. They come from "the site": the
+           * person who reads the answers is never named.
+           */
+          requests: (d.dispute.requests ?? []).map((r) => ({ side: r.side, at: r.at, due: r.due, text: r.text, answered_at: r.answer?.at ?? null })),
           /** How many evidence photos each side has added. Only the operator sees the photos. */
           evidence: { winner: d.dispute.evidence?.winner ?? 0, seller: d.dispute.evidence?.seller ?? 0 },
-          /** If the operator hasn't decided by then, the price goes back and both bonds too. */
-          decide_by: d.dispute.kind === "wrong-key" ? null : d.dispute.at + LIMITS.disputeDecideSec * 1000,
+          /** Undecided by then, the price goes back and both bonds too. */
+          decide_by: decideBy(d.dispute),
         }
       : null,
     resolution: d.resolution ? { decision: d.resolution.decision, reason: d.resolution.reason, fault: d.resolution.fault ?? "none", winner_percent: d.resolution.winner_percent ?? null } : null,
+    /**
+     * A return under way: the buyer won and is sending the item back. The
+     * address is sealed to the buyer, the note to the seller; the site can't
+     * read either.
+     */
+    return: d.return
+      ? {
+          at: d.return.at,
+          address_by: d.return.address_by,
+          address: d.return.address?.envelope ?? null,
+          address_at: d.return.address?.at ?? null,
+          send_by: d.return.send_by ?? null,
+          sent_at: d.return.sent?.at ?? null,
+          note: d.return.sent?.envelope ?? null,
+          confirm_by: d.return.confirm_by ?? null,
+          problem: d.return.problem?.text ?? null,
+        }
+      : null,
+    /** Digital: once the winner could read the lot, the time limit to say it is not what was described. */
+    complain_by: digitalComplainBy(d),
     /** Physical: the time to complain was extended once ("it hasn't arrived yet"). */
     extended_at: d.extended_at ?? null,
     /** How long the winner has to confirm or complain after the handover (a parcel: never under the site's minimum). */
@@ -142,7 +166,16 @@ export function publicView(auction: Auction, { info, escrow, site_key, units }: 
      * until `ends_at`. Like every private record, this view is given only to a
      * browser that shows the invite.
      */
-    deal: auction.deal ? { price: auction.deal.price, public_price: auction.deal.public_price } : null,
+    deal: auction.deal
+      ? {
+          price: auction.deal.price,
+          public_price: auction.deal.public_price,
+          /** Paying needs the code the seller gave the buyer apart from the link. */
+          has_code: !!auction.deal.code,
+          /** Too many wrong codes: the deal takes no more payments. */
+          code_locked: (auction.deal.code?.misses ?? 0) >= LIMITS.maxDealCodeMisses,
+        }
+      : null,
     /**
      * Order Flow: a batch sale of several identical units. `sold` is how many
      * found a buyer (null until decided) and `done` how many of those have

@@ -124,7 +124,7 @@ export default async function Orders() {
           </dl>
           <p className="muted small" style={{ margin: "14px 0 0" }}>
             A buyer who wants to keep an order from the site until the close, deposit and all, ticks Hide My Order From This Site and sends a
-            larger, round amount. One exception, by the buyer&apos;s choice: to dispute a unit, their browser hands the operator that one
+            larger, round amount. One exception, by the buyer&apos;s choice: to dispute a unit, their browser hands the site that one
             unit&apos;s key.
           </p>
         </section>

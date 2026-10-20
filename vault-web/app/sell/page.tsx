@@ -41,6 +41,7 @@ import type { PickedPhoto } from "@/lib/photoClient";
 
 const DURATIONS: [string, number][] = [
   ["15 minutes", 15 * 60],
+  ["30 minutes", 30 * 60],
   ["1 hour", 3600],
   ["6 hours", 6 * 3600],
   ["1 day", 86400],
@@ -50,6 +51,7 @@ const DURATIONS: [string, number][] = [
 const REVEALS: [string, number][] = [
   ["5 minutes", 5 * 60],
   ["15 minutes", 15 * 60],
+  ["30 minutes", 30 * 60],
   ["1 hour", 3600],
   ["6 hours", 6 * 3600],
 ];
@@ -295,7 +297,7 @@ export default function Sell() {
             <p className="hint" id="private-hint">
               You get an invite link and a QR code to send to the people you choose. Only they can see what you are selling or bid, and this
               site can&apos;t read the title or description. It still runs the auction, so it knows the reserve, the times and how many bids
-              there are. One exception: if the winner opens a dispute, their browser gives the operator the key to the description, so the
+              there are. One exception: if the winner opens a dispute, their browser gives the site the key to the description, so the
               dispute can be judged.
             </p>
           )}

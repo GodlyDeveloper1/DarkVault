@@ -1,12 +1,12 @@
 // What the winner does during delivery: send shipping details (sealed to the
 // seller), confirm they have the lot, or complain. Also: say a parcel hasn't
-// arrived yet (once), accept the seller's offer, add evidence photos.
+// arrived yet (once), answer the site's request for proof, add evidence photos.
 //
 // In a batch sale (Order Flow) every winner does this for the unit they won.
 // The request names the sale and the order, as always; which unit that is, is
 // worked out here.
 import { advance, advanceUnit, unitWonBy } from "@/lib/engine";
-import { addEvidence, validEnvelope, winnerAcceptOffer, winnerConfirm, winnerDispute, winnerExtend, winnerShipping } from "@/lib/delivery";
+import { addEvidence, answerProof, validEnvelope, winnerConfirm, winnerDispute, winnerExtend, winnerReturned, winnerShipping } from "@/lib/delivery";
 import { bad, clientKey, limited, matches, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
 import { loadAuction, withAuction, withUnit } from "@/lib/store";
@@ -33,7 +33,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     if (body.action === "confirm") return { error: winnerConfirm(auction, now) };
     if (body.action === "dispute") return { error: await winnerDispute(auction, now, { delivery_key: body.delivery_key, lot_key: body.lot_key, listing_key: body.listing_key, reason: body.reason }) };
     if (body.action === "extend") return { error: winnerExtend(auction, now) };
-    if (body.action === "accept_offer") return { error: winnerAcceptOffer(auction, now, body.percent) };
+    if (body.action === "proof") return { error: answerProof(auction, "winner", now, body.text) };
+    if (body.action === "returned") {
+      if (body.envelope !== undefined && !validEnvelope(body.envelope)) return { error: "invalid note" };
+      return { error: winnerReturned(auction, now, body.envelope as string | undefined) };
+    }
     if (body.action === "evidence") return { error: await addEvidence(auction, "winner", body.photo) };
     return { error: "unknown action" };
   };

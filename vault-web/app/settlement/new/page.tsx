@@ -27,6 +27,7 @@ import {
   sha256Hex,
   toBase64,
 } from "vault-core";
+import { codeProblem, dealCodeHash, normalCode } from "@/lib/dealCode";
 import BondFixed from "@/app/components/BondFixed";
 import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
@@ -35,6 +36,7 @@ import type { PickedPhoto } from "@/lib/photoClient";
 import { addressProblem } from "@/lib/wallet";
 
 const OFFERS: [string, number][] = [
+  ["30 minutes", 30 * 60],
   ["1 hour", 3600],
   ["6 hours", 6 * 3600],
   ["1 day", 86400],
@@ -64,6 +66,7 @@ export default function NewDeal() {
   const [bondPercent, setBondPercent] = useState(10);
   const [payout, setPayout] = useState("");
   const [showPrice, setShowPrice] = useState(true);
+  const [dealCode, setDealCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [made, setMade] = useState<{ id: string; key: string; invite: string; bond: number } | null>(null);
@@ -97,7 +100,8 @@ export default function NewDeal() {
   const minBond = priceZat !== null && !priceProblem ? bondFor(priceZat, bondPercent) : 0;
   const bondZat = minBond;
   const payoutProblem = addressProblem(payout);
-  const ready = title.trim().length >= 3 && priceZat !== null && !priceProblem && !itemProblem && payout.trim().length > 20 && !payoutProblem && !busy;
+  const dealCodeProblem = codeProblem(dealCode);
+  const ready = title.trim().length >= 3 && priceZat !== null && !priceProblem && !itemProblem && payout.trim().length > 20 && !payoutProblem && !dealCodeProblem && !busy;
 
   function pick(next: Kind) {
     setKind(next);
@@ -129,7 +133,8 @@ export default function NewDeal() {
         body: JSON.stringify({
           // The terms leave this page encrypted. The site gets the ciphertext and the hash of an access token.
           private: { listing: await encryptListing(invite, { title: title.trim(), description: terms.trim() }), access_hash: await sha256Hex(await inviteAccess(invite)) },
-          deal: { public_price: showPrice },
+          // The code itself never leaves this page: only a hash of it made with the invite key, which the site never sees.
+          deal: { public_price: showPrice, ...(normalCode(dealCode) ? { code_hash: await dealCodeHash(invite, dealCode) } : {}) },
           // Photos, redrawn when picked, encrypted here with the deal's key and padded to one size.
           ...(photos.length ? { photos: await Promise.all(photos.map(async (p, i) => toBase64(await encryptPhoto(invite, i, p.bytes)))) } : {}),
           reserve: priceZat,
@@ -181,6 +186,12 @@ export default function NewDeal() {
               <strong>This link is the deal.</strong> Whoever has it can read the terms and pay, so send it only to the person you agreed with. The
               terms were encrypted in your browser: this site can&apos;t read them. The part after the # is the key; it never reaches this site.
             </p>
+            {normalCode(dealCode) && (
+              <p className="small deal-code-note" id="deal-code-note">
+                <strong>Tell your buyer the Deal Code separately</strong>, not in the same message as the link: by phone, or another app. Paying
+                needs both. Your code: <span className="mono">{normalCode(dealCode)}</span>
+              </p>
+            )}
             <div className="row" style={{ alignItems: "flex-start" }}>
               <Qr value={dealLink} size={150} />
               <div className="grow">
@@ -256,7 +267,7 @@ export default function NewDeal() {
           <textarea id="terms" value={terms} maxLength={1200} onChange={(e) => setTerms(e.target.value)} placeholder="Exactly what the buyer gets, and anything else the two of you agreed. If there is a dispute, this is what it is judged against." />
           <p className="hint" id="terms-hint">
             Both are encrypted in your browser before they are sent. Only someone with the deal link can read them: this site can&apos;t. One
-            exception: if the buyer opens a dispute, their browser gives the operator the key to these terms, so the dispute can be judged.
+            exception: if the buyer opens a dispute, their browser gives the site the key to these terms, so the dispute can be judged.
           </p>
 
           <PhotoPicker photos={photos} onChange={setPhotos} sealed />
@@ -366,6 +377,14 @@ export default function NewDeal() {
           <label htmlFor="payout">Your Shielded Payout Address</label>
           <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
           <p className={payoutProblem ? "hint error" : "hint"}>{payoutProblem ?? "A fresh unified address from your testnet wallet. Only this site sees it; it is never published."}</p>
+
+          <label htmlFor="deal-code">Deal Code (Optional)</label>
+          <input id="deal-code" className="mono" value={dealCode} maxLength={40} onChange={(e) => setDealCode(e.target.value)} placeholder="For example: BLUE-7731" spellCheck={false} autoComplete="off" />
+          <p className={dealCodeProblem ? "hint error" : "hint"}>
+            {dealCodeProblem
+              ? `The code needs ${dealCodeProblem}.`
+              : "A short code you tell the buyer apart from the link, by phone, say. Paying then needs both, so a link that is forwarded or seen by someone else can't take the deal. The code never reaches this site."}
+          </p>
 
           <label className="check" htmlFor="show-price">
             <input type="checkbox" id="show-price" checked={showPrice} onChange={(e) => setShowPrice(e.target.checked)} />

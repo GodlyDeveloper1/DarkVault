@@ -1,7 +1,8 @@
-// The operator decides a dispute: "release" pays the seller, "refund" returns
-// the price to the winner. The side that lost also loses its bond to the
-// other, unless no_fault is set. "split" with winner_percent (1 to 99) shares
-// the price, nobody at fault.
+// The operator decides a dispute. One side wins it all: "release" (the seller
+// wins: paid, plus the buyer's bond) or "refund" (the buyer wins: refunded,
+// plus the seller's bond). "lost": a parcel lost in the post, refunded with
+// each bond back to its owner. "return": the buyer wins a dispute over a posted
+// item but sends it back first; the refund follows the return.
 import { advance, advanceUnit } from "@/lib/engine";
 import { operatorResolve } from "@/lib/delivery";
 import { bad, ok, readJson } from "@/lib/http";
@@ -17,9 +18,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!body) return bad("invalid request");
   // The record in dispute may be one sold unit of a batch sale. Only the operator ever names one by id.
   const unit = !!(await loadRecord(id))?.unit_of;
-  const result = await (unit ? withUnit : withAuction)(id, (auction) => ({ error: operatorResolve(auction, Date.now(), body.decision, body.no_fault, body.winner_percent) }));
+  const result = await (unit ? withUnit : withAuction)(id, (auction) => ({ error: operatorResolve(auction, Date.now(), body.decision) }));
   if (!result) return bad("not found", 404);
   if (result.error) return bad(result.error);
   await (unit ? advanceUnit : advance)(id, true);
-  return ok({ decided: body.decision, no_fault: body.no_fault === true || body.decision === "split", winner_percent: body.decision === "split" ? body.winner_percent : null });
+  return ok({ decided: body.decision });
 }

@@ -131,7 +131,7 @@ export async function lotKeyHash(lotKey: Uint8Array): Promise<string> {
 // --- sealed envelopes --------------------------------------------------------
 
 /** What an envelope is for. It is bound into the encryption, so an envelope can't be replayed for another purpose or auction. */
-export function deliveryContext(auctionId: string, purpose: "lot-key" | "shipping" | "note"): string {
+export function deliveryContext(auctionId: string, purpose: "lot-key" | "shipping" | "note" | "return-address" | "return-note"): string {
   return `dark-vault/v1/${purpose}:${auctionId}`;
 }
 

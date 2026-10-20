@@ -99,7 +99,7 @@ export default async function Settlement() {
             ))}
           </dl>
           <p className="muted small" style={{ margin: "14px 0 0" }}>
-            One exception, and it is the buyer&apos;s choice: to open a dispute, their browser hands the operator the key to the terms, so the dispute
+            One exception, and it is the buyer&apos;s choice: to open a dispute, their browser hands the site the key to the terms, so the dispute
             can be judged against what was agreed.
           </p>
         </section>

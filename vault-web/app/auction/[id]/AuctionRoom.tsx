@@ -510,7 +510,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
           <strong style={{ color: "var(--lime)" }}>PRIVATE AUCTION.</strong> It is not listed anywhere. The title and description were encrypted in the
           seller&apos;s browser and opened here in yours, with the key in your invite link: this site stores them but can&apos;t read them. Only
           people who hold the invite can see this page or bid. The site still runs the auction, so it knows the reserve, the times and how
-          many bids there are. If a winner opens a dispute, their browser gives the operator the key to the description so it can be judged.
+          many bids there are. If a winner opens a dispute, their browser gives the site the key to the description so it can be judged.
         </div>
       )}
 
@@ -551,7 +551,7 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
                   the winner. A winner who opens a dispute and loses it loses theirs to the seller. Honest parties get theirs back.
                 </>
               ) : (
-                <>In a real auction the price is still held until the lot is handed over, and a dispute is decided by the operator.</>
+                <>In a real auction the price is still held until the lot is handed over, and a dispute is decided by the site, on proof from both sides.</>
               )}
             </p>
           )}
@@ -726,8 +726,8 @@ export default function AuctionRoom({ initial, serverNow }: { initial: PublicAuc
                     ? "Here the seller is this site: it encrypted the lot itself and, after the sale, sends the key sealed so only the winner can open it. In a real auction the seller's browser does both, and the site can't read the lot."
                     : "The lot was encrypted in the seller's browser. After the sale the seller's browser sends the key, sealed so only the winner can open it. If the key doesn't arrive, or doesn't open the lot, the winner is refunded."
                   : auction.delivery.kind === "promise"
-                    ? "The winner tells the seller what they want, sealed so only the seller can read it. If the seller doesn't do it in time, the winner is refunded; a dispute is decided by the operator."
-                    : "The winner sends shipping details sealed so only the seller can read them. If the seller doesn't ship in time, the winner is refunded; a dispute is decided by the operator."}{" "}
+                    ? "The winner tells the seller what they want, sealed so only the seller can read it. If the seller doesn't do it in time, the winner is refunded; a dispute is decided by the site, on proof from both sides."
+                    : "The winner sends shipping details sealed so only the seller can read them. If the seller doesn't ship in time, the winner is refunded; a dispute is decided by the site, on proof from both sides."}{" "}
                 Time limits: {span(auction.delivery.deliver_seconds)} to hand over, then {span(auction.delivery.dispute_seconds)} for the winner to open a dispute.
               </p>
             )}

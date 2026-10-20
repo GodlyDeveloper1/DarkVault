@@ -33,7 +33,7 @@ import {
 } from "vault-core";
 import { placeBid } from "../bids";
 import { DATA_DIR } from "../datadir";
-import { deliveryStage, operatorResolve, sellerHandover, winnerConfirm } from "../delivery";
+import { deliveryStage, undoPractice, sellerHandover, winnerConfirm } from "../delivery";
 import { advance, moneyByBid, minimumDeposit } from "../engine";
 import { sha256Hex } from "../http";
 import { LIMITS } from "../limits";
@@ -245,7 +245,7 @@ async function attend(id: string, now: number): Promise<boolean> {
     // A complaint about a practice lot is not argued: the sale is undone and the price goes back to
     // the winner, with nobody at fault. Otherwise a dispute would hold the purse's coins for nothing.
     if (stage === "disputed") {
-      await withAuction(id, (a) => void operatorResolve(a, now, "refund", true));
+      await withAuction(id, (a) => void undoPractice(a, now));
       await advance(id, true);
       return false;
     }

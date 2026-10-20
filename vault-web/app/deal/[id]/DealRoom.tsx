@@ -26,6 +26,7 @@ import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
 import PayLink from "@/app/components/PayLink";
 import { SellerDelivery, WinnerDelivery } from "@/app/auction/[id]/Delivery";
+import { CODE_MIN, dealCodeHash, normalCode } from "@/lib/dealCode";
 import { headersOf, inviteFor, inviteHeaders } from "@/lib/invites";
 import { sellerKeyFor } from "@/lib/sellerKey";
 import { loadTickets, parseTicketFile, saveTicket, ticketFile, tokenOf, type Ticket } from "@/lib/tickets";
@@ -382,7 +383,14 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
               <MyPayment key={t.bid_id} ticket={t} view={views[t.bid_id]} unknown={!!unknown[t.bid_id]} deal={deal} title={title} toPay={toPay} refresh={() => void refresh()} />
             ))}
 
-          {!isSeller && mounted && deal.state === "open" && tickets.every((t) => unknown[t.bid_id]) && (
+          {!isSeller && mounted && deal.state === "open" && deal.deal?.code_locked && tickets.every((t) => unknown[t.bid_id]) && (
+            <div className="card bad" id="code-locked">
+              <p style={{ margin: 0 }}>
+                This deal has had too many wrong Deal Codes, so it takes no more payments. Ask the seller to make a new deal.
+              </p>
+            </div>
+          )}
+          {!isSeller && mounted && deal.state === "open" && !deal.deal?.code_locked && tickets.every((t) => unknown[t.bid_id]) && (
             <AcceptForm deal={deal} toPay={toPay} onAccepted={(all) => (setTickets(all), void refresh())} />
           )}
           {!isSeller && mounted && deal.state === "funding" && (
@@ -468,7 +476,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
                   ? "The buyer tells the seller what they want, sealed so only the seller can read it. If the seller doesn't do it in time, the buyer is refunded."
                   : "The buyer sends shipping details sealed so only the seller can read them. If the seller doesn't ship in time, the buyer is refunded."}{" "}
               When the buyer confirms, or their time to complain runs out, the price is released to the seller. A dispute is decided by the
-              operator, who is then given the key to the terms by the buyer&apos;s browser.
+              site, on proof from both sides; the buyer&apos;s browser then gives it the key to the terms.
             </p>
             {d && (
               <p className="muted small" style={{ margin: "10px 0 0" }} id="deal-limits">
@@ -525,6 +533,8 @@ function BondFunding({ bond }: { bond: NonNullable<SellerView["bond"]> }) {
 /** The buyer accepts: the site makes a payment address for this browser alone. Nothing is paid yet. */
 function AcceptForm({ deal, toPay, onAccepted }: { deal: PublicAuction; toPay: number; onAccepted: (all: Ticket[]) => void }) {
   const [refund, setRefund] = useState("");
+  const [code, setCode] = useState("");
+  const needsCode = !!deal.deal?.has_code;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const price = deal.deal?.price ?? deal.reserve;
@@ -535,7 +545,7 @@ function AcceptForm({ deal, toPay, onAccepted }: { deal: PublicAuction; toPay: n
     if (saved) setRefund(saved);
   }, []);
   const problem = addressProblem(refund);
-  const ready = refund.trim().length > 20 && !problem && !busy;
+  const ready = refund.trim().length > 20 && !problem && (!needsCode || normalCode(code).length >= CODE_MIN) && !busy;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -556,6 +566,8 @@ function AcceptForm({ deal, toPay, onAccepted }: { deal: PublicAuction; toPay: n
           token_hash: await sha256Hex(await bidToken(token_secret)),
           refund_address: refund.trim(),
           delivery_pub: deliveryPublic(delivery_key),
+          // The code is hashed here with the invite key: neither reaches the site.
+          ...(needsCode && invite ? { deal_code: await dealCodeHash(invite, code) } : {}),
         }),
       });
       const body = await res.json();
@@ -617,6 +629,13 @@ function AcceptForm({ deal, toPay, onAccepted }: { deal: PublicAuction; toPay: n
           </>
         )}
       </p>
+      {needsCode && (
+        <>
+          <label htmlFor="accept-code">Deal Code</label>
+          <input id="accept-code" className="mono" value={code} maxLength={40} onChange={(e) => setCode(e.target.value)} placeholder="The code the seller told you" spellCheck={false} autoComplete="off" />
+          <p className="hint">The seller set a code for this deal and told it to you apart from the link. Paying needs both.</p>
+        </>
+      )}
       {error && <p className="error small">{error}</p>}
       <div className="row" style={{ marginTop: 14 }}>
         <button className="primary lg" id="accept-button" disabled={!ready}>

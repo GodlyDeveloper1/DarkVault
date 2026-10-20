@@ -24,9 +24,12 @@ interface Dispute {
   market: "auction" | "settlement" | "order-flow";
   sale_id: string | null;
   evidence: { winner: number; seller: number };
-  offer_percent: number | null;
+  requests: { side: "winner" | "seller"; at: number; due: number; text: string; answer: { at: number; text: string } | null }[];
   decide_by: number;
+  return: { at: number; address_by: number; address_at: number | null; send_by: number | null; sent_at: number | null; confirm_by: number | null; problem: string | null } | null;
 }
+
+type Decision = "release" | "refund" | "lost" | "return";
 
 const KEY = "dv-operator-key";
 const MARKET = { auction: "Auction", settlement: "Settlement Deal", "order-flow": "Order Flow Unit" } as const;
@@ -141,9 +144,9 @@ export default function OperatorDesk() {
 function DisputeCard({ d, opKey, done }: { d: Dispute; opKey: string; done: () => void }) {
   const [photos, setPhotos] = useState<{ side: string; url: string }[]>([]);
   const [lotText, setLotText] = useState<string | null>(null);
-  const [pct, setPct] = useState(50);
-  const [noFault, setNoFault] = useState(false);
-  const [confirm, setConfirm] = useState<null | { decision: "release" | "refund" | "split" }>(null);
+  const [confirm, setConfirm] = useState<null | { decision: Decision }>(null);
+  const [asking, setAsking] = useState<null | "winner" | "seller">(null);
+  const [askText, setAskText] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const headers = { "x-operator-key": opKey };
@@ -181,13 +184,29 @@ function DisputeCard({ d, opKey, done }: { d: Dispute; opKey: string; done: () =
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  async function decide(decision: "release" | "refund" | "split") {
+  async function ask() {
+    if (!asking) return;
+    setBusy(true);
+    setProblem(null);
+    const res = await fetch(`/api/operator/disputes/${d.id}/ask`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ side: asking, text: askText }),
+    });
+    setBusy(false);
+    if (!res.ok) return setProblem((await res.json().catch(() => ({}))).error ?? "The request was refused.");
+    setAsking(null);
+    setAskText("");
+    done();
+  }
+
+  async function decide(decision: Decision) {
     setBusy(true);
     setProblem(null);
     const res = await fetch(`/api/operator/disputes/${d.id}`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify(decision === "split" ? { decision, winner_percent: pct } : { decision, no_fault: noFault }),
+      body: JSON.stringify({ decision }),
     });
     setBusy(false);
     if (!res.ok) return setProblem((await res.json().catch(() => ({}))).error ?? "The decision was refused.");
@@ -196,12 +215,16 @@ function DisputeCard({ d, opKey, done }: { d: Dispute; opKey: string; done: () =
   }
 
   const said = confirm
-    ? confirm.decision === "split"
-      ? `Give the buyer ${pct}% of the price back and the seller ${100 - pct}%. Both bonds go back.`
-      : confirm.decision === "release"
-        ? `Pay the seller.${noFault ? " Both bonds go back." : " The buyer loses their bond to the seller."}`
-        : `Refund the buyer.${noFault ? " Both bonds go back." : " The seller loses their bond to the buyer."}`
+    ? confirm.decision === "release"
+      ? "The seller wins: they are paid, and the buyer's bond goes to them."
+      : confirm.decision === "refund"
+        ? "The buyer wins: their payment comes back, with the seller's bond."
+        : confirm.decision === "return"
+          ? "The buyer wins, but posts the item back first. The seller has 48 hours to give a return address; the refund, with the seller's bond, follows the return."
+          : "Lost in the post: the buyer is refunded, and each bond goes back to its owner."
     : "";
+  // During a return its own deadlines decide; asking again is for a problem with what came back.
+  const openAsk = (side: "winner" | "seller") => (!!d.return && !d.return.problem) || d.requests.some((r) => r.side === side && !r.answer);
 
   return (
     <article className="card op-card" data-id={d.id}>
@@ -222,7 +245,7 @@ function DisputeCard({ d, opKey, done }: { d: Dispute; opKey: string; done: () =
         <dt>Handed over</dt>
         <dd>{when(d.handed_over_at)}</dd>
         <dt>Decide by</dt>
-        <dd>{when(d.decide_by)} <span className="muted small">(then: refund, nobody at fault)</span></dd>
+        <dd>{when(d.decide_by)} <span className="muted small">(then: everyone&apos;s own money goes back)</span></dd>
       </dl>
       {d.description && (
         <details className="op-desc">
@@ -236,10 +259,28 @@ function DisputeCard({ d, opKey, done }: { d: Dispute; opKey: string; done: () =
       <p className="small op-said">
         <strong>The seller answers:</strong> {d.seller_reply ? <>&ldquo;{d.seller_reply}&rdquo;</> : <span className="muted">No answer yet.</span>}
       </p>
-      {d.offer_percent !== null && (
-        <p className="small">
-          <strong>Standing offer:</strong> the seller offers {d.offer_percent}% back. The buyer has not accepted it.
-        </p>
+      {d.requests.length > 0 && (
+        <div className="op-requests">
+          {d.requests.map((r, i) => (
+            <div key={i} className={`op-request${r.answer ? " answered" : Date.now() > r.due ? " missed" : ""}`}>
+              <p className="small">
+                <strong>Asked the {r.side === "winner" ? "buyer" : "seller"}</strong> <span className="muted">{when(r.at)}</span>
+              </p>
+              <p className="small muted" style={{ whiteSpace: "pre-wrap" }}>{r.text}</p>
+              {r.answer ? (
+                <p className="small" style={{ whiteSpace: "pre-wrap" }}>
+                  <strong>Answer ({when(r.answer.at)}):</strong> &ldquo;{r.answer.text}&rdquo;
+                </p>
+              ) : (
+                <p className="small">
+                  <strong className={Date.now() > r.due ? "error" : undefined}>
+                    {Date.now() > r.due ? "No answer in time: this side loses on the next pass." : `Waiting for an answer until ${when(r.due)}.`}
+                  </strong>
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
       )}
       {d.lot_available && (
         <div className="row" style={{ margin: "8px 0" }}>
@@ -261,33 +302,69 @@ function DisputeCard({ d, opKey, done }: { d: Dispute; opKey: string; done: () =
         </div>
       )}
 
+      {d.return && (
+        <div className="op-request answered op-return">
+          <p className="small">
+            <strong>Return under way</strong> <span className="muted">since {when(d.return.at)}</span>
+          </p>
+          <p className="small">
+            {d.return.problem
+              ? `The seller says what came back is wrong: "${d.return.problem}". Both sides have been asked for proof.`
+              : !d.return.address_at
+                ? `Waiting for the seller's return address until ${when(d.return.address_by)} (then: refund, the buyer keeps it).`
+                : !d.return.sent_at
+                  ? `Waiting for the buyer to post it back until ${when(d.return.send_by)} (then: the seller is paid).`
+                  : `Posted back ${when(d.return.sent_at)}. Waiting for the seller to confirm until ${when(d.return.confirm_by)} (then: refund).`}
+          </p>
+        </div>
+      )}
+      {asking && (
+        <div className="card op-ask">
+          <label htmlFor={`ask-${d.id}`}>Ask The {asking === "winner" ? "Buyer" : "Seller"} For Proof</label>
+          <textarea
+            id={`ask-${d.id}`}
+            value={askText}
+            maxLength={600}
+            onChange={(e) => setAskText(e.target.value)}
+            placeholder="What you need to see. They read it as a request from the site, with 48 hours to answer."
+          />
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="primary" disabled={busy || askText.trim().length < 10} onClick={() => void ask()}>
+              {busy ? "Sending…" : "Send The Request"}
+            </button>
+            <button disabled={busy} onClick={() => setAsking(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
       {!confirm ? (
         <div className="op-decide">
           <div className="row">
+            <button disabled={busy || openAsk("winner")} onClick={() => setAsking("winner")} title={openAsk("winner") ? "The buyer has not answered the last request yet" : undefined}>
+              Ask The Buyer
+            </button>
+            <button disabled={busy || openAsk("seller")} onClick={() => setAsking("seller")} title={openAsk("seller") ? "The seller has not answered the last request yet" : undefined}>
+              Ask The Seller
+            </button>
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
             <button className="primary" disabled={busy} onClick={() => setConfirm({ decision: "release" })}>
-              Release To Seller
+              Seller Wins
             </button>
             <button className="danger" disabled={busy} onClick={() => setConfirm({ decision: "refund" })}>
-              Refund The Buyer
+              Buyer Wins
             </button>
-            <label className="op-nofault small">
-              <input type="checkbox" checked={noFault} onChange={(e) => setNoFault(e.target.checked)} /> Nobody at fault (both bonds go back)
-            </label>
-          </div>
-          <div className="row offer-row" style={{ marginTop: 10 }}>
-            <input
-              type="number"
-              className="offer-pct"
-              min={1}
-              max={99}
-              value={pct}
-              aria-label="Percent of the price back to the buyer"
-              onChange={(e) => setPct(Math.max(1, Math.min(99, Math.round(Number(e.target.value) || 1))))}
-            />
-            <span className="small muted">% back to the buyer</span>
-            <button disabled={busy} onClick={() => setConfirm({ decision: "split" })}>
-              Split The Price
-            </button>
+            {d.lot === "physical" && !d.return && (
+              <button className="danger" disabled={busy} onClick={() => setConfirm({ decision: "return" })}>
+                Buyer Wins, Return First
+              </button>
+            )}
+            {d.lot === "physical" && (
+              <button disabled={busy} onClick={() => setConfirm({ decision: "lost" })}>
+                Lost In The Post
+              </button>
+            )}
           </div>
         </div>
       ) : (

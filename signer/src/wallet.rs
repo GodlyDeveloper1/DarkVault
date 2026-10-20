@@ -800,10 +800,23 @@ async fn create_vault(config: &SyncConfig) -> anyhow::Result<NewVault> {
             .into_inner()
             .height,
     )?;
-    let birthday_height = tip.saturating_sub(1);
+    let mut db = open_db(config)?;
+    if house_account(config, &db)?.is_none() {
+        return Err(anyhow!("wallet not initialised yet; wait for the first sync"));
+    }
+
+    // The vault's birthday is the block just after the last one this wallet has
+    // scanned. A new vault can't have been paid before it existed, so nothing is
+    // missed. It must not be lower: since the NU7 libraries, a birthday below
+    // the scanned height makes the wallet rewind its note commitment trees to
+    // it, and that rewind can fail ("retains checkpoints both above and below
+    // height ...") when no checkpoint sits at the height it needs.
+    let scanned = db.block_max_scanned()?.map(|m| u32::from(m.block_height()));
+    let prior = scanned.map_or(tip.saturating_sub(2), |s| s.min(tip));
+    let birthday_height = prior + 1;
     let tree_state = client
         .get_tree_state(service::BlockId {
-            height: u64::from(birthday_height.saturating_sub(1)),
+            height: u64::from(prior),
             ..Default::default()
         })
         .await?
@@ -815,10 +828,6 @@ async fn create_vault(config: &SyncConfig) -> anyhow::Result<NewVault> {
     getrandom::getrandom(&mut id_bytes).map_err(|e| anyhow!("rng: {e}"))?;
     let vault_id: String = id_bytes.iter().map(|b| format!("{b:02x}")).collect();
 
-    let mut db = open_db(config)?;
-    if house_account(config, &db)?.is_none() {
-        return Err(anyhow!("wallet not initialised yet; wait for the first sync"));
-    }
     let (account, _usk) = db.create_account(
         &format!("vault-{vault_id}"),
         &SecretVec::new(config.seed.clone()),

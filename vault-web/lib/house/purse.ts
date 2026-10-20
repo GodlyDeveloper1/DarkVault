@@ -30,6 +30,7 @@ import "server-only";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { DATA_DIR } from "../datadir";
+import { replaceFile } from "../store";
 import { houseSigner, vaultInfo as mainVaultInfo } from "../signer";
 import { HOUSE, slotAmount } from "./config";
 
@@ -104,9 +105,7 @@ async function load(): Promise<Purse> {
 /** Writes the purse now. Used before a payment is asked for, so that what it was for survives a crash. */
 export async function savePurse(purse: Purse): Promise<void> {
   await fs.mkdir(DIR, { recursive: true });
-  const tmp = `${FILE}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(purse, null, 1), "utf8");
-  await fs.rename(tmp, FILE);
+  await replaceFile(FILE, JSON.stringify(purse, null, 1));
 }
 
 // One change to the purse at a time, in this one server process. The queue

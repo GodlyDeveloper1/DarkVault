@@ -10,7 +10,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import type { IconType } from "react-icons";
-import { PiEyeBold, PiGavelBold, PiHandshakeBold, PiPathBold, PiScalesBold, PiSquaresFourBold, PiStackBold, PiTagBold, PiWarningBold } from "react-icons/pi";
+import { PiEyeBold, PiGavelBold, PiHandshakeBold, PiPathBold, PiScalesBold, PiShieldCheckBold, PiSquaresFourBold, PiStackBold, PiTagBold, PiWarningBold } from "react-icons/pi";
 import ChainStatus from "./ChainStatus";
 import WalletButton from "./WalletButton";
 
@@ -39,6 +39,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
       { href: "/#story", label: "How It Works", icon: PiPathBold },
       { href: "/#privacy", label: "Who Sees What", icon: PiEyeBold },
       { href: "/#limits", label: "The Limits", icon: PiWarningBold },
+      { href: "/rules", label: "Dispute Rules", icon: PiShieldCheckBold },
     ],
   },
 ];

@@ -1,9 +1,8 @@
 // Open disputes, for the operator: what the winner says, what the seller
 // answers, and what is at stake. A disputed unit of a batch sale is listed
 // like any sold lot, under its own id.
-import { disputedListing } from "@/lib/delivery";
+import { decideBy, disputedListing } from "@/lib/delivery";
 import { bad, ok } from "@/lib/http";
-import { LIMITS } from "@/lib/limits";
 import { isOperator } from "@/lib/operator";
 import { listRecords } from "@/lib/store";
 
@@ -38,10 +37,22 @@ export async function GET(req: Request) {
         sale_id: a.unit_of?.parent ?? null,
         /** Evidence photos: /api/operator/disputes/<id>/evidence/<winner|seller>/<n> */
         evidence: { winner: a.delivery!.dispute!.evidence?.winner ?? 0, seller: a.delivery!.dispute!.evidence?.seller ?? 0 },
-        /** The seller's standing offer of part of the price back, if any. */
-        offer_percent: a.delivery!.dispute!.offer?.percent ?? null,
-        /** Undecided by then, it ends as a refund with nobody at fault. */
-        decide_by: a.delivery!.dispute!.at + LIMITS.disputeDecideSec * 1000,
+        /** The site's requests for proof, and what each side sent back. A request unanswered by its deadline loses that side the dispute. */
+        requests: (a.delivery!.dispute!.requests ?? []).map((r) => ({ side: r.side, at: r.at, due: r.due, text: r.text, answer: r.answer ?? null })),
+        /** A return under way (the buyer won and is sending it back): where it stands. */
+        return: a.delivery!.return
+          ? {
+              at: a.delivery!.return.at,
+              address_by: a.delivery!.return.address_by,
+              address_at: a.delivery!.return.address?.at ?? null,
+              send_by: a.delivery!.return.send_by ?? null,
+              sent_at: a.delivery!.return.sent?.at ?? null,
+              confirm_by: a.delivery!.return.confirm_by ?? null,
+              problem: a.delivery!.return.problem?.text ?? null,
+            }
+          : null,
+        /** Undecided by then, it ends with everyone's own money going back. */
+        decide_by: decideBy(a.delivery!.dispute!),
       };
     }),
   );

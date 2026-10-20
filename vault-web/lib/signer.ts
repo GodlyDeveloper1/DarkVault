@@ -89,7 +89,34 @@ function withoutDust(info: VaultInfo): VaultInfo {
   return { ...info, deposits: info.deposits.filter((d) => d.value_zatoshis > DUST_ZATOSHIS) };
 }
 
-/** One signer, reached at `url`. `name` is used in the message when it can't be reached. */
+/**
+ * What a visitor is told when the signer can't be reached or fails. Never a
+ * technical message: those go to the server's log for the operator.
+ */
+export const SIGNER_BUSY = "Dark Vault's wallet service is busy for a moment. Please try again in a minute.";
+
+const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Tries a signer call again when the signer is unreachable or failed inside
+ * (a 5xx: the testnet server briefly out of reach, a wallet hiccup). Never
+ * used for a payout: a payout is only ever asked for once per pass, and the
+ * engine works out on its next pass whether it happened.
+ */
+async function again<T>(what: string, f: () => Promise<T>, waits = [1500, 4000]): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await f();
+    } catch (e) {
+      const retryable = e instanceof SignerError && e.status >= 500;
+      if (!retryable || i >= waits.length) throw e;
+      console.error(`signer: ${what} failed (${(e as Error).message.slice(0, 300)}); trying again`);
+      await pause(waits[i]!);
+    }
+  }
+}
+
+/** One signer, reached at `url`. `name` is used in the log when it can't be reached. */
 function client(url: string, name: string) {
   // A payout is the slow call: the signer builds a shielded transaction, which can take minutes on a small machine.
   async function call<T>(path: string, init?: RequestInit, timeoutMs = 30_000): Promise<T> {
@@ -97,9 +124,14 @@ function client(url: string, name: string) {
     try {
       res = await fetch(`${url}${path}`, { ...init, cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
     } catch {
-      throw new SignerError(503, `The ${name} isn't reachable. Is it running (cargo run --release)?`);
+      console.error(`signer: the ${name} at ${url} isn't reachable. Is it running (cargo run --release)?`);
+      throw new SignerError(503, SIGNER_BUSY);
     }
-    if (!res.ok) throw new SignerError(res.status, (await res.text()) || `${name} returned ${res.status}`);
+    if (!res.ok) {
+      const text = (await res.text()) || `${name} returned ${res.status}`;
+      if (res.status >= 500) console.error(`signer: ${name} ${path} answered ${res.status}: ${text.slice(0, 500)}`);
+      throw new SignerError(res.status, text);
+    }
     return (await res.json()) as T;
   }
 
@@ -108,11 +140,12 @@ function client(url: string, name: string) {
   return {
     chainStatus: (): Promise<ChainStatus> => call<ChainStatus>("/status"),
 
-    checkAddress: (address: string): Promise<{ ok: boolean; reason: string | null }> => call("/addresses/check", json({ address })),
+    checkAddress: (address: string): Promise<{ ok: boolean; reason: string | null }> => again("address check", () => call("/addresses/check", json({ address }))),
 
-    createVault: (): Promise<{ vault_id: string; birthday_height: number }> => call("/vaults", { method: "POST" }, 120_000),
+    createVault: (): Promise<{ vault_id: string; birthday_height: number }> => again("opening a vault", () => call("/vaults", { method: "POST" }, 120_000)),
 
-    newDepositAddress: async (vaultId: string): Promise<string> => (await call<{ address: string }>(`/vaults/${vaultId}/addresses`, { method: "POST" })).address,
+    newDepositAddress: async (vaultId: string): Promise<string> =>
+      (await again("a deposit address", () => call<{ address: string }>(`/vaults/${vaultId}/addresses`, { method: "POST" }))).address,
 
     /**
      * What a vault holds. Cached for a few seconds, because any visitor can cause

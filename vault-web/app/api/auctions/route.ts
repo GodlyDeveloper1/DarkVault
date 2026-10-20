@@ -2,6 +2,7 @@
 // market) is created here too: it is the same record with a fixed price and
 // no bidding. So is a batch sale (the Order Flow market): the same record
 // with several units, each with an encrypted lot of its own.
+import { createHash } from "node:crypto";
 import { BATCH_MAX_ORDER, BATCH_MAX_UNITS, BATCH_MIN_UNITS, MAX_PHOTOS, MIN_BOND, PHOTO_MAX_BYTES, SEALED_PHOTO_BYTES, bondFor, cleanJpeg, fromBase64, validSealedListing } from "vault-core";
 import { DEAL_TITLE, PRIVATE_TITLE } from "@/lib/access";
 import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
@@ -47,7 +48,7 @@ export async function POST(req: Request) {
     hidden = { listing: p.listing, access_hash: p.access_hash };
   }
   // A deal: two people settling a price they already agreed. Always private, always with a handover.
-  let deal: { public_price: boolean } | null = null;
+  let deal: { public_price: boolean; code_hash?: string } | null = null;
   if (body.deal !== undefined) {
     const d = body.deal as Record<string, unknown> | null;
     if (!d || typeof d !== "object") return bad("invalid deal");
@@ -55,6 +56,11 @@ export async function POST(req: Request) {
     if (body.delivery === undefined) return bad("a deal needs a handover: digital, physical or a promise");
     if (body.ceiling !== undefined && body.ceiling !== null) return bad("a deal has one price");
     deal = { public_price: d.public_price === true };
+    if (d.code_hash !== undefined) {
+      if (typeof d.code_hash !== "string" || !/^[0-9a-f]{64}$/.test(d.code_hash)) return bad("invalid deal code");
+      // Stored hashed again, like every secret the site checks (lib/http.ts matches).
+      deal.code_hash = createHash("sha256").update(d.code_hash, "utf8").digest("hex");
+    }
   }
   // A batch sale: several identical units, one sealed order per unit. Public, and every unit is digital.
   let batch: { lots: { key_hash: string; bytes: Uint8Array }[] } | null = null;
@@ -199,13 +205,13 @@ export async function POST(req: Request) {
       delivery,
       lot,
       ...(hidden ? { private: hidden } : {}),
-      ...(deal ? { deal: { price: reserve, public_price: deal.public_price } } : {}),
+      ...(deal ? { deal: { price: reserve, public_price: deal.public_price, ...(deal.code_hash ? { code: { hash: deal.code_hash, misses: 0 } } : {}) } } : {}),
       ...(batch ? { unitLots: batch.lots } : {}),
       ...(photos.length ? { photos } : {}),
     });
     return ok({ auction: publicView(auction, { info: null, escrow: null, site_key: null }) }, 201);
   } catch (e) {
-    if (e instanceof SignerError) return bad(e.status === 503 ? e.message : "the signer could not open a vault for this auction", 503);
+    if (e instanceof SignerError) return bad(e.status === 503 ? e.message : "The vault for this listing couldn't be opened just now. Nothing was created and nothing was paid: please try again in a minute.", 503);
     return bad("could not create the auction", 500);
   }
 }

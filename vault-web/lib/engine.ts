@@ -66,6 +66,7 @@ import {
   type PlannedPayment,
   type SealedBid,
 } from "vault-core";
+import { decideBy, silentSide } from "./delivery";
 import { beaconChain, fetchBeacon } from "./drand";
 import { LIMITS } from "./limits";
 import { createAuction, listRecords, loadAuction, loadUnit, saveProof, withAuction, withUnit, deleteEvidence } from "./store";
@@ -804,10 +805,23 @@ export function dueResolution(d: Delivery, now: number): { decision: "release" |
   }
   if (!d.handover) return now > (d.deliver_by ?? Infinity) ? { decision: "refund", reason: "not-delivered", fault: "seller" } : null;
   if (d.dispute) {
-    // Decided by the keys, by the operator, or between the two sides. An
-    // operator who doesn't decide in time can't trap anyone's money: the
-    // price goes back to the winner, and each bond to its owner.
-    if (d.dispute.kind !== "wrong-key" && now > d.dispute.at + LIMITS.disputeDecideSec * 1000) return { decision: "refund", reason: "operator-timeout", fault: "none" };
+    if (d.dispute.kind === "wrong-key") return null; // decided by the keys, at once
+    // A return under way is decided by its own deadlines: whoever misses theirs loses.
+    const ret = d.return;
+    if (ret && !ret.problem) {
+      if (!ret.address) return now > ret.address_by ? { decision: "refund", reason: "return-no-address", fault: "seller" } : null;
+      if (!ret.sent) return now > (ret.send_by ?? Infinity) ? { decision: "release", reason: "return-not-sent", fault: "winner" } : null;
+      return now > (ret.confirm_by ?? Infinity) ? { decision: "refund", reason: "returned", fault: "seller" } : null;
+    }
+    // A side asked for proof that sent nothing in time loses the dispute.
+    // Both silent: nobody wins, and everyone's own money goes back.
+    const silent = silentSide(d.dispute, now);
+    if (silent === "winner") return { decision: "release", reason: "no-proof", fault: "winner" };
+    if (silent === "seller") return { decision: "refund", reason: "no-proof", fault: "seller" };
+    if (silent === "both") return { decision: "refund", reason: "operator-timeout", fault: "none" };
+    // Nobody decided in time: no one's money can be trapped. The price goes
+    // back to the winner, and each bond to its owner.
+    if (now > (decideBy(d.dispute) ?? Infinity)) return { decision: "refund", reason: "operator-timeout", fault: "none" };
     return null;
   }
   return now > (d.dispute_by ?? Infinity) ? { decision: "release", reason: "no-complaint", fault: "none" } : null;

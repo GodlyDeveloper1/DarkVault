@@ -426,7 +426,7 @@ const SHARED_FEATURES: { icon: IconType; title: string; text: string }[] = [
   { icon: PiKeyBold, title: "Keys Kept Apart", text: "Only the signer, a separate program, holds the wallet's keys. The website never sees a seed." },
   { icon: PiCameraBold, title: "Photos, Cleaned", text: "Listing photos and dispute evidence are redrawn in your browser: no location, device or time leaves with them." },
   { icon: PiHandshakeBold, title: "Settle It Yourselves", text: "In a dispute the seller can offer part of the price back. Accept it and it ends there, with nobody at fault." },
-  { icon: PiHourglassHighBold, title: "Nothing Left Hanging", text: "A parcel gets a week to arrive, and more if you ask. A dispute the operator doesn't decide in a week is refunded." },
+  { icon: PiHourglassHighBold, title: "Nothing Left Hanging", text: "A parcel gets a week to arrive, and 3 more days if you ask. A dispute is decided on proof, and one nobody decides in 3 days goes back to everyone." },
   { icon: PiSpeakerHighBold, title: "The Guide Reads Aloud", text: "Answers spoken by your device's own voice, never by a server. No microphone." },
 ];
 

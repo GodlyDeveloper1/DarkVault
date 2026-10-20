@@ -18,9 +18,46 @@ function fileFor(id: string): string {
 export async function loadRecord(id: string): Promise<Auction | null> {
   if (!ID.test(id)) return null;
   try {
-    return JSON.parse(await fs.readFile(fileFor(id), "utf8")) as Auction;
+    return JSON.parse(await patiently(() => fs.readFile(fileFor(id), "utf8"))) as Auction;
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw e;
+  }
+}
+
+// Found on testnet, on Windows: replacing a record failed with EPERM because
+// something had it open at that instant (a page reading it, or the virus
+// scanner looking at the new file). The change was lost: a seller's photo was
+// saved but never counted, so every later photo failed. On Windows these
+// errors pass in a moment, so a file operation that meets one waits a little
+// and tries again (as graceful-fs does), for up to about 8 seconds.
+const PASSING = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+export async function patiently<T>(op: () => Promise<T>): Promise<T> {
+  let wait = 10;
+  for (let spent = 0; ; ) {
+    try {
+      return await op();
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException).code ?? "";
+      if (!PASSING.has(code) || spent >= 8000) throw e;
+      await new Promise((r) => setTimeout(r, wait));
+      spent += wait;
+      wait = Math.min(wait * 2, 500);
+    }
+  }
+}
+
+let tmpCount = 0;
+
+/** Writes `file` whole, or not at all: a new copy beside it, then put in its place. */
+export async function replaceFile(file: string, text: string): Promise<void> {
+  const tmp = `${file}.${process.pid}.${++tmpCount}.tmp`;
+  await fs.writeFile(tmp, text, "utf8");
+  try {
+    await patiently(() => fs.rename(tmp, file));
+  } catch (e) {
+    await fs.rm(tmp, { force: true }).catch(() => {});
     throw e;
   }
 }
@@ -42,10 +79,7 @@ export async function loadUnit(id: string): Promise<Auction | null> {
 
 async function write(auction: Auction): Promise<void> {
   await fs.mkdir(DIR, { recursive: true });
-  const file = fileFor(auction.id);
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(auction, null, 1), "utf8");
-  await fs.rename(tmp, file); // atomic replace
+  await replaceFile(fileFor(auction.id), JSON.stringify(auction, null, 1));
 }
 
 export async function createAuction(auction: Auction): Promise<void> {
@@ -170,9 +204,13 @@ const evidenceFile = (id: string, side: Side, index: number) => {
   return path.join(EVIDENCE, `${id}.${side}.${index}.jpg`);
 };
 
+/**
+ * The record's count says which photos exist. A file at `index` that the count
+ * doesn't include is left from a save that failed half way, so it is replaced.
+ */
 export async function saveEvidence(id: string, side: Side, index: number, bytes: Uint8Array): Promise<void> {
   await fs.mkdir(EVIDENCE, { recursive: true });
-  await fs.writeFile(evidenceFile(id, side, index), bytes, { flag: "wx" });
+  await patiently(() => fs.writeFile(evidenceFile(id, side, index), bytes));
 }
 
 export async function loadEvidence(id: string, side: Side, index: number): Promise<Uint8Array | null> {
@@ -231,10 +269,7 @@ export async function saveProof(id: string, body: unknown): Promise<number> {
   if (!ID.test(id)) throw new Error("bad auction id");
   await fs.mkdir(PROOFS, { recursive: true });
   const text = JSON.stringify(body);
-  const file = path.join(PROOFS, `${id}.json`);
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, text, "utf8");
-  await fs.rename(tmp, file);
+  await replaceFile(path.join(PROOFS, `${id}.json`), text);
   return Buffer.byteLength(text);
 }
 

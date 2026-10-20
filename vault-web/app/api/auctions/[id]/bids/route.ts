@@ -6,11 +6,12 @@
 // address: its refund then goes back to the house purse, for that wallet.
 import { maySee } from "@/lib/access";
 import { placeBid, type Placed } from "@/lib/bids";
-import { bad, clientKey, limited, ok, readJson, tooMany } from "@/lib/http";
+import { bad, clientKey, limited, matches, ok, readJson, tooMany } from "@/lib/http";
 import { HOUSE } from "@/lib/house/config";
 import { attachBid, walletFor } from "@/lib/house/practice";
 import { treasuryAddress, withPurse } from "@/lib/house/purse";
-import { loadAuction } from "@/lib/store";
+import { LIMITS } from "@/lib/limits";
+import { loadAuction, withAuction } from "@/lib/store";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +25,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (wait) return tooMany(wait, "bids");
   const body = await readJson(req);
   if (!body) return bad("invalid request");
+  // A deal with a code: paying needs the code the seller gave the buyer apart from the link.
+  if (known.deal?.code) {
+    const problem = await checkDealCode(id, body.deal_code);
+    if (problem) return bad(problem, 403);
+  }
   const commitment = typeof body.commitment === "string" ? body.commitment : "";
   const tokenHash = typeof body.token_hash === "string" ? body.token_hash : "";
   const refund = typeof body.refund_address === "string" ? body.refund_address.trim() : "";
@@ -64,4 +70,17 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const result = await placeBid(id, { ...rest, refund });
   if ("error" in result) return bad(result.error, result.status ?? 400);
   return ok(result, 201);
+}
+
+/** Checks a deal's code, counting wrong ones under the deal's lock. Null when it is right. */
+async function checkDealCode(id: string, given: unknown): Promise<string | null> {
+  const result = await withAuction(id, (a) => {
+    const code = a.deal?.code;
+    if (!code) return null;
+    if (code.misses >= LIMITS.maxDealCodeMisses) return "this deal has had too many wrong codes and takes no more payments; ask the seller to make a new one";
+    if (typeof given === "string" && matches(given, code.hash)) return null;
+    code.misses++;
+    return given === undefined || given === "" ? "this deal needs the code the seller gave you" : "that is not this deal's code";
+  });
+  return result ?? null;
 }

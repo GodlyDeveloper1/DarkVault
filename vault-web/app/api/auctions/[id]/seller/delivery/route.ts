@@ -1,12 +1,12 @@
 // The seller hands over: the lot key sealed to the winner (digital), or
 // "shipped", with an optional sealed note (physical). Or, during a dispute:
-// `reply` answers the complaint for the operator, `offer` offers part of the
-// price back (the winner may accept), `evidence` adds a photo for the operator.
+// `reply` answers the complaint, `proof` answers the site's request for proof,
+// `evidence` adds a photo to it.
 //
 // In a batch sale (Order Flow) the seller does this once per unit that sold,
 // and says which with `unit` (1 is the first).
 import { advance, advanceUnit, unitId } from "@/lib/engine";
-import { addEvidence, sellerHandover, sellerOffer, sellerReply, validEnvelope } from "@/lib/delivery";
+import { addEvidence, answerProof, sellerHandover, sellerReply, sellerReturnAddress, sellerReturnProblem, sellerReturnReceived, validEnvelope } from "@/lib/delivery";
 import { bad, clientKey, limited, matches, ok, readJson, tooMany } from "@/lib/http";
 import { LIMITS } from "@/lib/limits";
 import { loadAuction, withAuction, withUnit } from "@/lib/store";
@@ -27,7 +27,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const act = async (auction: Auction): Promise<{ error: string | null }> => {
     if (!matches(key, auction.seller.key_hash)) return { error: "not found" };
     if (body.reply !== undefined) return { error: sellerReply(auction, Date.now(), body.reply) };
-    if (body.offer !== undefined) return { error: sellerOffer(auction, Date.now(), body.offer) };
+    if (body.proof !== undefined) return { error: answerProof(auction, "seller", Date.now(), body.proof) };
+    // A return: where to send it (sealed to the buyer), "it is back", or "what came back is wrong".
+    if (body.return_address !== undefined) return { error: validEnvelope(body.return_address) ? sellerReturnAddress(auction, Date.now(), body.return_address) : "invalid return address" };
+    if (body.return_received === true) return { error: sellerReturnReceived(auction, Date.now()) };
+    if (body.return_problem !== undefined) return { error: sellerReturnProblem(auction, Date.now(), body.return_problem) };
     if (body.evidence !== undefined) return { error: await addEvidence(auction, "seller", body.evidence) };
     if (body.envelope !== undefined && !validEnvelope(body.envelope)) return { error: "invalid envelope" };
     return { error: sellerHandover(auction, Date.now(), body.envelope as string | undefined) };

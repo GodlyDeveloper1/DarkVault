@@ -18,7 +18,7 @@ import "server-only";
 import { cleanJpeg, decryptListingWithKey, decryptLot, fromBase64, judgeDigitalDelivery, lotKeyHash, type Fault, type ListingText, type LotHeader } from "vault-core";
 import { LIMITS } from "./limits";
 import { lotOf, saveEvidence, type Side } from "./store";
-import type { Auction, Delivery } from "./types";
+import type { Auction, Delivery, ProofRequest } from "./types";
 
 const ENVELOPE = /^[A-Za-z0-9+/]{80,}={0,2}$/;
 
@@ -63,7 +63,11 @@ export function complaintSeconds(d: Delivery): number {
   return d.kind === "physical" ? Math.max(d.dispute_seconds, LIMITS.minPhysicalComplaintSec) : d.dispute_seconds;
 }
 
-/** Physical: "it hasn't arrived yet". Once, before the time to complain runs out, it adds another complaint window. */
+/**
+ * Physical: "it hasn't arrived yet". Once, before the time to complain runs
+ * out, it adds a few days (LIMITS.extendSec). Fixed and short, so a buyer
+ * can't use it to hold the seller's money for weeks.
+ */
 export function winnerExtend(auction: Auction, now: number): string | null {
   const d = inProgress(auction);
   if (typeof d === "string") return d;
@@ -73,38 +77,7 @@ export function winnerExtend(auction: Auction, now: number): string | null {
   if (d.extended_at) return "the time has already been extended once";
   if (now > (d.dispute_by ?? 0)) return "the time to complain has passed";
   d.extended_at = now;
-  d.dispute_by = (d.dispute_by ?? now) + complaintSeconds(d) * 1000;
-  return null;
-}
-
-/**
- * The seller offers part of the price back, to end a dispute without the
- * operator. They can change the offer, or withdraw it with 0, until the winner
- * accepts. 100 is the whole price: a refund the seller chose, with nobody at fault.
- */
-export function sellerOffer(auction: Auction, now: number, percent: unknown): string | null {
-  const d = inProgress(auction);
-  if (typeof d === "string") return d;
-  if (!d.dispute || d.dispute.kind === "wrong-key") return "there is no complaint to settle";
-  if (typeof percent !== "number" || !Number.isInteger(percent) || percent < 0 || percent > 100) return "offer a whole percentage of the price, from 1 to 100 (or 0 to withdraw it)";
-  if (percent === 0) delete d.dispute.offer;
-  else d.dispute.offer = { at: now, percent };
-  return null;
-}
-
-/** The winner accepts the seller's offer: the dispute ends, nobody at fault, both bonds go back. */
-export function winnerAcceptOffer(auction: Auction, now: number, percent: unknown): string | null {
-  const d = inProgress(auction);
-  if (typeof d === "string") return d;
-  const offer = d.dispute?.offer;
-  if (!offer) return "the seller has not made an offer";
-  // The winner names what they saw, so a changed offer can't be accepted by mistake.
-  if (percent !== offer.percent) return "the seller has changed the offer; reload the page and look again";
-  d.resolution =
-    offer.percent === 100
-      ? { decision: "refund", reason: "agreed", fault: "none", at: now }
-      : { decision: "split", reason: "agreed", fault: "none", at: now, winner_percent: offer.percent };
-  forgetKeys(d);
+  d.dispute_by = (d.dispute_by ?? now) + LIMITS.extendSec * 1000;
   return null;
 }
 
@@ -124,6 +97,103 @@ export function sellerReply(auction: Auction, now: number, text: unknown): strin
   const reply = typeof text === "string" ? text.trim() : "";
   if (reply.length < 10 || reply.length > LIMITS.replyMax) return `please answer in 10 to ${LIMITS.replyMax} characters`;
   d.dispute.seller_reply = { at: now, text: reply };
+  const open = openRequest(d, "seller");
+  if (open) open.answer = { at: now, text: reply };
+  return null;
+}
+
+// --- requests for proof --------------------------------------------------------
+//
+// One side wins the whole dispute; the other loses it, and with it their bond.
+// What decides it is proof. When a dispute opens the site asks both sides for
+// theirs, with a deadline, and the operator can ask again. The request comes
+// from "the site": neither side is told a person reads it. A side that sends
+// nothing by the deadline loses (engine: dueResolution).
+
+const ASK: Record<Delivery["kind"], Record<ProofRequest["side"], string>> = {
+  physical: {
+    winner:
+      "Show what is wrong: photos of the parcel and of what arrived. If nothing arrived, say so, and add anything that shows it, such as the tracking page. Cover any name or address first.",
+    seller:
+      "Show that you sent it: the receipt of posting or the tracking page, and photos of the item before you packed it. Cover any name or address first.",
+  },
+  digital: {
+    winner:
+      "Show what is wrong, in order: what you were sent, what you did with it, and the error you got (for a product key, the activation screen with its error code). Cover any name first.",
+    seller:
+      "Show that what you delivered was genuine and unused: the receipt from where you got it, for example. Cover any name first.",
+  },
+  promise: {
+    winner: "Show what was not done as promised: screenshots or photos, and a short note.",
+    seller: "Show that it was done as promised: screenshots or photos, and a short note.",
+  },
+};
+
+/** When an undecided dispute ends by itself, everyone's own money going back. */
+export function decideBy(dispute: NonNullable<Delivery["dispute"]>): number | null {
+  if (dispute.kind === "wrong-key") return null;
+  return dispute.decide_by ?? dispute.at + LIMITS.disputeDecideSec * 1000;
+}
+
+/**
+ * Who has lost by saying nothing: the side whose request for proof ran out
+ * first without an answer. Both silent: nobody wins, and everyone's own money
+ * goes back (null side, "both").
+ */
+export function silentSide(dispute: NonNullable<Delivery["dispute"]>, now: number): ProofRequest["side"] | "both" | null {
+  const missed = (dispute.requests ?? []).filter((r) => !r.answer && now > r.due);
+  if (missed.length === 0) return null;
+  const sides = new Set(missed.map((r) => r.side));
+  if (sides.size === 2) return "both";
+  return missed[0]!.side;
+}
+
+/** The request to this side that is still waiting for an answer, if any. */
+export function openRequest(d: Delivery, side: ProofRequest["side"]): ProofRequest | undefined {
+  return d.dispute?.requests?.find((r) => r.side === side && !r.answer);
+}
+
+function ask(d: Delivery, side: ProofRequest["side"], now: number, text: string): void {
+  const dispute = d.dispute!;
+  const due = now + LIMITS.proofSec * 1000;
+  (dispute.requests ??= []).push({ side, at: now, due, text });
+  // Time to read the answer before the dispute times out.
+  dispute.decide_by = Math.max(dispute.decide_by ?? dispute.at + LIMITS.disputeDecideSec * 1000, due + 24 * 3600_000);
+}
+
+/** When a dispute opens: the site asks both sides for proof. */
+function askBoth(d: Delivery, now: number): void {
+  d.dispute!.decide_by = now + LIMITS.disputeDecideSec * 1000;
+  ask(d, "winner", now, ASK[d.kind].winner);
+  ask(d, "seller", now, ASK[d.kind].seller);
+}
+
+/** The operator asks one side for (more) proof. Shown to that side as a request from the site. */
+export function operatorAsk(auction: Auction, now: number, side: unknown, text: unknown): string | null {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  if (!d.dispute || d.dispute.kind === "wrong-key") return "there is no dispute to ask about";
+  if (side !== "winner" && side !== "seller") return "ask the winner or the seller";
+  if (d.return && !d.return.problem) return "a return is under way: its own deadlines decide it";
+  const said = typeof text === "string" ? text.trim() : "";
+  if (said.length < 10 || said.length > LIMITS.proofTextMax) return `say what you need in 10 to ${LIMITS.proofTextMax} characters`;
+  if (openRequest(d, side)) return "that side has not answered the last request yet";
+  ask(d, side, now, said);
+  return null;
+}
+
+/** One side answers the site's request: a note (their photos are added beside it). */
+export function answerProof(auction: Auction, side: ProofRequest["side"], now: number, text: unknown): string | null {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  const open = openRequest(d, side);
+  if (!open) return "there is no request for proof waiting for you";
+  if (now > open.due) return "the time to answer has passed";
+  const said = typeof text === "string" ? text.trim() : "";
+  if (said.length < 10 || said.length > LIMITS.proofTextMax) return `please write 10 to ${LIMITS.proofTextMax} characters`;
+  open.answer = { at: now, text: said };
+  // The seller's first answer is also their reply to the complaint, which the winner sees.
+  if (side === "seller" && !d.dispute!.seller_reply) d.dispute!.seller_reply = { at: now, text: said };
   return null;
 }
 
@@ -182,7 +252,7 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
   let listing: { listing_key: string } | Record<string, never> = {};
   const needsListing = !!auction.private && (d.kind !== "digital" || typeof input.lot_key === "string");
   if (needsListing) {
-    if (typeof input.listing_key !== "string" || !/^[0-9a-f]{64}$/.test(input.listing_key)) return "the key to this private listing is needed, so the operator can read what was described";
+    if (typeof input.listing_key !== "string" || !/^[0-9a-f]{64}$/.test(input.listing_key)) return "the key to this private listing is needed, so the site can read what was described";
     try {
       await decryptListingWithKey(input.listing_key, auction.private!.listing);
     } catch {
@@ -194,6 +264,7 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
   if (d.kind !== "digital") {
     if (reasonProblem) return reasonProblem;
     d.dispute = { at: now, kind: d.kind, reason, ...listing };
+    askBoth(d, now);
     return null;
   }
 
@@ -202,8 +273,11 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
   if (!winner?.delivery_pub || !d.lot || !lot || !d.handover.envelope) return "this delivery can't be checked";
 
   if (typeof input.lot_key === "string") {
-    // "Not as described": only someone who really opened the lot can say so.
+    // "Not as described": only someone who really opened the lot can say so,
+    // and soon after: an honest buyer checks a key or a file at once.
     if (reasonProblem) return reasonProblem;
+    const by = digitalComplainBy(d);
+    if (by !== null && now > by) return `the ${Math.round(LIMITS.digitalComplaintSec / 3600)} hours to say it is not what was described have passed`;
     if (!/^[0-9a-f]{64}$/.test(input.lot_key)) return "that is not a lot key";
     const key = unhex(input.lot_key);
     try {
@@ -213,6 +287,7 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
       return "that key does not open the lot. Ask for your payment back instead.";
     }
     d.dispute = { at: now, kind: "not-as-described", reason, lot_key: input.lot_key, ...listing };
+    askBoth(d, now);
     return null;
   }
 
@@ -236,26 +311,120 @@ export async function winnerDispute(auction: Auction, now: number, input: { deli
 }
 
 /**
- * The operator decides a dispute. "release" pays the seller, "refund" returns
- * the price to the winner. Unless `noFault` is set, the side that lost the
- * dispute also loses its bond to the other.
+ * The operator decides a dispute. One side wins it all:
+ *   "release": the seller wins. They are paid, and the winner's bond goes to them.
+ *   "refund":  the winner wins. Their payment comes back, with the seller's bond.
+ *   "lost":    a parcel lost, damaged or held in the post. Nobody lied: the
+ *              payment comes back and each bond goes back to its owner.
+ *   "return":  the winner wins a dispute over a posted item, but sends it back
+ *              first. The refund (with the seller's bond) follows the return.
+ * There are no splits and no "nobody at fault" for anything else.
  */
-export function operatorResolve(auction: Auction, now: number, decision: unknown, noFault: unknown, winnerPercent?: unknown): string | null {
+export function operatorResolve(auction: Auction, now: number, decision: unknown): string | null {
   const d = inProgress(auction);
   if (typeof d === "string") return d;
   if (!d.dispute || d.dispute.kind === "wrong-key") return "there is no dispute to decide";
-  if (decision === "split") {
-    // Both sides share the price, for when neither is to blame (a parcel damaged in the post) or both are a little.
-    if (typeof winnerPercent !== "number" || !Number.isInteger(winnerPercent) || winnerPercent < 1 || winnerPercent > 99)
-      return "a split gives the winner a whole percentage of the price, from 1 to 99";
-    d.resolution = { decision: "split", reason: "operator", fault: "none", at: now, winner_percent: winnerPercent };
-  } else {
-    if (decision !== "release" && decision !== "refund") return "the decision must be release, refund or split";
-    const fault: Fault = noFault === true ? "none" : decision === "release" ? "winner" : "seller";
-    d.resolution = { decision, reason: "operator", fault, at: now };
+  if (decision === "return") {
+    if (d.kind !== "physical") return "only a posted item can be sent back";
+    if (d.return) return "a return is already under way";
+    d.return = { at: now, address_by: now + LIMITS.returnAddressSec * 1000 };
+    // Requests for proof still waiting are over: the dispute is decided, only the return is left.
+    d.dispute.requests = (d.dispute.requests ?? []).filter((r) => r.answer);
+    return null;
   }
+  if (decision === "lost") {
+    if (d.kind !== "physical") return "only a parcel can be lost in the post";
+    d.resolution = { decision: "refund", reason: "lost-in-post", fault: "none", at: now };
+  } else if (decision === "release" || decision === "refund") {
+    d.resolution = { decision, reason: "operator", fault: decision === "release" ? "winner" : "seller", at: now };
+  } else return "the decision must be release (the seller wins), refund (the buyer wins), return or lost";
   forgetKeys(d);
   return null;
+}
+
+// --- a return --------------------------------------------------------------
+//
+// The buyer won a dispute over a posted item and sends it back before the
+// refund. The seller's return address is sealed to the buyer; the buyer's note
+// (a tracking number) is sealed to the seller. The site passes them on and
+// can't read either. The deadlines are in dueResolution (engine.ts).
+
+function returning(auction: Auction): { d: Delivery; r: NonNullable<Delivery["return"]> } | string {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  if (!d.return) return "there is no return under way";
+  if (d.return.problem) return "the return is with the site now";
+  return { d, r: d.return };
+}
+
+/** The seller says where the item should come back to, sealed to the buyer. */
+export function sellerReturnAddress(auction: Auction, now: number, envelope: string): string | null {
+  const x = returning(auction);
+  if (typeof x === "string") return x;
+  if (x.r.address) return "you have already sent your return address";
+  if (now > x.r.address_by) return "the time to send a return address has passed";
+  x.r.address = { at: now, envelope };
+  x.r.send_by = now + LIMITS.returnSendSec * 1000;
+  return null;
+}
+
+/** The buyer has posted it back, with an optional sealed note for the seller. */
+export function winnerReturned(auction: Auction, now: number, envelope: string | undefined): string | null {
+  const x = returning(auction);
+  if (typeof x === "string") return x;
+  if (!x.r.address) return "the seller has not sent a return address yet";
+  if (x.r.sent) return "already marked as posted back";
+  if (now > (x.r.send_by ?? 0)) return "the time to post it back has passed";
+  x.r.sent = envelope ? { at: now, envelope } : { at: now };
+  x.r.confirm_by = now + LIMITS.returnConfirmSec * 1000;
+  return null;
+}
+
+/** The seller has it back: the buyer is refunded, with the seller's bond. */
+export function sellerReturnReceived(auction: Auction, now: number): string | null {
+  const x = returning(auction);
+  if (typeof x === "string") return x;
+  if (!x.r.sent) return "the buyer has not posted it back yet";
+  x.d.resolution = { decision: "refund", reason: "returned", fault: "seller", at: now };
+  forgetKeys(x.d);
+  return null;
+}
+
+/** The seller says what came back is not what they sent. The site asks both sides for proof, as at the start. */
+export function sellerReturnProblem(auction: Auction, now: number, text: unknown): string | null {
+  const x = returning(auction);
+  if (typeof x === "string") return x;
+  if (!x.r.sent) return "the buyer has not posted it back yet";
+  if (now > (x.r.confirm_by ?? 0)) return "the time to report a problem has passed";
+  const said = typeof text === "string" ? text.trim() : "";
+  if (said.length < 10 || said.length > LIMITS.proofTextMax) return `please say what is wrong in 10 to ${LIMITS.proofTextMax} characters`;
+  x.r.problem = { at: now, text: said };
+  x.d.dispute!.decide_by = now + LIMITS.disputeDecideSec * 1000;
+  ask(x.d, "seller", now, "Show what came back and how it differs from what you sent: photos of it, and your photos from before you posted it. Cover any name or address first.");
+  ask(x.d, "winner", now, "The seller says what came back is not what they sent. Show what you posted back: the receipt of posting, the tracking, and photos of the item and its packing. Cover any name or address first.");
+  return null;
+}
+
+/** A practice auction's dispute is not argued: the sale is undone, nobody at fault. Only the house calls this. */
+export function undoPractice(auction: Auction, now: number): string | null {
+  const d = inProgress(auction);
+  if (typeof d === "string") return d;
+  if (!auction.house) return "not a practice auction";
+  d.resolution = { decision: "refund", reason: "operator", fault: "none", at: now };
+  forgetKeys(d);
+  return null;
+}
+
+/** Digital: the time limit to say a lot is not as described, once the winner has been able to read it. Null until then. */
+export function digitalComplainBy(d: Delivery): number | null {
+  if (d.kind !== "digital" || !d.lot_opened_at) return null;
+  return Math.min(d.dispute_by ?? Infinity, d.lot_opened_at + LIMITS.digitalComplaintSec * 1000);
+}
+
+/** The winner's browser has fetched the encrypted lot: from now on they can read it. Recorded once. */
+export function lotOpened(auction: Auction, now: number): void {
+  const d = auction.delivery;
+  if (d?.kind === "digital" && d.handover && !d.lot_opened_at && !d.resolution) d.lot_opened_at = now;
 }
 
 /** For the operator: the delivered lot, opened with the key the winner handed over. */

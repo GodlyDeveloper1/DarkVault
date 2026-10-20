@@ -4,6 +4,7 @@ import "@fontsource-variable/space-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 import "./globals.css";
 import Frame from "./components/Frame";
+import TopLoader from "./components/TopLoader";
 
 export const metadata: Metadata = {
   title: { default: "Dark Vault — private markets on shielded Zcash", template: "%s · Dark Vault" },
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               "try{if(!matchMedia('(prefers-reduced-motion: reduce)').matches)document.documentElement.classList.add('dv-motion')}catch(e){}",
           }}
         />
+        <TopLoader />
         <Frame>{children}</Frame>
       </body>
     </html>

@@ -35,6 +35,7 @@ import { addressProblem } from "@/lib/wallet";
 
 const DURATIONS: [string, number][] = [
   ["15 minutes", 15 * 60],
+  ["30 minutes", 30 * 60],
   ["1 hour", 3600],
   ["6 hours", 6 * 3600],
   ["1 day", 86400],
@@ -44,6 +45,7 @@ const DURATIONS: [string, number][] = [
 const REVEALS: [string, number][] = [
   ["5 minutes", 5 * 60],
   ["15 minutes", 15 * 60],
+  ["30 minutes", 30 * 60],
   ["1 hour", 3600],
   ["6 hours", 6 * 3600],
 ];

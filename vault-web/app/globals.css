@@ -4066,3 +4066,157 @@ select.g-voice-pick {
   font-size: 0.78rem;
   border-radius: 8px;
 }
+
+/* The bar across the top while the next page loads: solid lime, a darker edge
+   under it so it sits raised like the buttons, no glow. */
+.top-loader {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 4px;
+  z-index: 1000;
+  pointer-events: none;
+  opacity: 0;
+}
+.top-loader span {
+  display: block;
+  height: 3px;
+  width: 0;
+  background: var(--lime);
+  border-bottom: 1px solid var(--lime-edge);
+  border-radius: 0 3px 3px 0;
+  transition: width 0.26s ease-out;
+}
+.top-loader.loading {
+  opacity: 1;
+}
+.top-loader.done {
+  opacity: 0;
+  transition: opacity 0.3s ease 0.15s;
+}
+.top-loader.done span {
+  transition: width 0.15s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .top-loader span {
+    transition: none;
+  }
+}
+
+/* Disputes: the site's request for proof, and the operator's view of it. */
+.proof-box {
+  margin: 12px 0 0;
+}
+.proof-ask {
+  margin: 0;
+  border-left: 4px solid var(--amber);
+}
+.proof-ask.bad {
+  border-left-color: var(--red);
+}
+.proof-from {
+  margin: 0;
+  color: var(--amber);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.proof-due {
+  margin: 10px 0 0;
+}
+.proof-sent {
+  margin: 0;
+}
+.op-requests {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+}
+.op-request {
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--edge);
+  border-left: 4px solid var(--amber);
+  border-radius: 10px;
+}
+.op-request p {
+  margin: 0 0 4px;
+}
+.op-request.answered {
+  border-left-color: var(--lime);
+}
+.op-request.missed {
+  border-left-color: var(--red);
+}
+.op-ask {
+  margin: 14px 0 0;
+}
+
+/* The Dispute Rules page. */
+.rules-card {
+  margin-bottom: 18px;
+}
+.rules-card h2 {
+  margin: 0 0 12px;
+}
+.rules-table {
+  display: grid;
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  overflow: hidden;
+}
+.rules-row {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr 1fr;
+  gap: 12px;
+  padding: 11px 14px;
+  border-top: 1px solid var(--line);
+  font-size: 0.93rem;
+}
+.rules-table.cases .rules-row {
+  grid-template-columns: 1fr 1.8fr 1fr;
+}
+.rules-row:first-child {
+  border-top: 0;
+}
+.rules-head {
+  background: var(--panel-2);
+  color: var(--lime);
+  font-weight: 700;
+}
+.rules-list {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+.rules-list li {
+  margin: 6px 0;
+}
+.rules-list strong {
+  color: var(--text);
+}
+.dispute-rules-link {
+  margin: 10px 0 0;
+}
+@media (max-width: 720px) {
+  .rules-row,
+  .rules-table.cases .rules-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .rules-head {
+    display: none;
+  }
+}
+
+/* A return under way: the card on both sides, and the operator's status line. */
+.return-card {
+  margin: 12px 0 0;
+  border-left: 4px solid var(--cyan);
+}
+.return-card .proof-from {
+  color: var(--cyan);
+}
+.op-return {
+  border-left-color: var(--cyan);
+  margin: 12px 0 0;
+}

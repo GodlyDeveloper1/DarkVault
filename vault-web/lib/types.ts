@@ -106,7 +106,12 @@ export type ResolutionReason =
   | "as-described" // the winner said the lot is what was described
   | "operator" // a dispute decided by the operator
   | "operator-timeout" // the operator didn't decide in time: the price goes back, nobody at fault
-  | "agreed" // the seller offered part of the price back and the winner accepted
+  | "agreed" // older records: the seller offered part of the price back and the winner accepted
+  | "no-proof" // the site asked one side for proof and they sent none in time: that side loses
+  | "lost-in-post" // a parcel lost, damaged or held in the post: refunded, nobody at fault
+  | "returned" // the buyer won and posted the item back: refunded, with the seller's bond
+  | "return-no-address" // the buyer won, but the seller never said where to return it: refunded, and the buyer keeps it
+  | "return-not-sent" // the buyer won, but never posted the item back: the seller is paid
   | "not-sold"; // nothing was sold: the seller's bond goes back
 
 /**
@@ -115,6 +120,36 @@ export type ResolutionReason =
  * been handed over. The site passes sealed envelopes between seller and winner
  * and can't open them.
  */
+/** A request from the site (the operator, who is never named to either side) for proof. */
+export interface ProofRequest {
+  side: "winner" | "seller";
+  at: number;
+  /** Answer by then, or lose the dispute. */
+  due: number;
+  text: string;
+  answer?: { at: number; text: string };
+}
+
+/**
+ * A return. The buyer won a "not as described" dispute over a posted item,
+ * and gets their money back once the item is on its way back to the seller.
+ * Each step has a deadline; whoever misses theirs loses (engine: dueResolution).
+ */
+export interface ReturnStep {
+  at: number;
+  /** The seller says where to send it, sealed to the buyer, by then. */
+  address_by: number;
+  address?: { at: number; envelope: string };
+  /** The buyer posts it back by then (set when the address arrives). */
+  send_by?: number;
+  /** Posted back, with an optional note (a tracking number) sealed to the seller. */
+  sent?: { at: number; envelope?: string };
+  /** The seller confirms it is back by then, or the buyer is refunded anyway. */
+  confirm_by?: number;
+  /** The seller says what came back is wrong: the dispute goes back to the site, which asks both for proof. */
+  problem?: { at: number; text: string };
+}
+
 export interface Delivery {
   /**
    * "digital": a text or file, encrypted at listing, unlocked by a key.
@@ -160,9 +195,17 @@ export interface Delivery {
   handover?: { at: number; envelope?: string };
   /** The winner must confirm or complain by this time. */
   dispute_by?: number;
-  /** Physical: the winner said the parcel hasn't arrived yet, once, which added another complaint window. */
+  /** Physical: the winner said the parcel hasn't arrived yet, once, which added a few more days (LIMITS.extendSec). */
   extended_at?: number;
+  /**
+   * Digital: when the winner's browser first fetched the encrypted lot, so
+   * when they could first read it. From then they have a short time
+   * (LIMITS.digitalComplaintSec) to say it is not what was described.
+   */
+  lot_opened_at?: number;
   confirmed_at?: number;
+  /** The buyer won, and is sending the item back before the refund. */
+  return?: ReturnStep;
   dispute?: {
     at: number;
     /** "wrong-key" is decided by the keys at once; the other two wait for the operator. */
@@ -175,8 +218,16 @@ export interface Delivery {
     listing_key?: string;
     /** The seller's answer to the complaint. */
     seller_reply?: { at: number; text: string };
-    /** The seller offers this percentage of the price back (1 to 100). The winner may accept it; the seller may change it until then. */
+    /** Older records only: an offer of part of the price back. Offers and splits are gone: one side wins the whole dispute. */
     offer?: { at: number; percent: number };
+    /**
+     * The site asks one side for proof, with a deadline. Both sides are asked
+     * when the dispute opens; the operator can ask again. A side that sends
+     * nothing by the deadline loses the dispute (see dueResolution).
+     */
+    requests?: ProofRequest[];
+    /** Undecided by then, the dispute ends with everyone's own money going back to them. */
+    decide_by?: number;
     /** How many evidence photos each side has added (stored in <data>/evidence/, seen only by the operator, deleted after the payout). */
     evidence?: { winner: number; seller: number };
   };
@@ -258,7 +309,16 @@ export interface Auction {
    * a deal is always private (its terms are encrypted in the seller's browser).
    * `public_price`: the seller chose to show the price on the public ledger.
    */
-  deal?: { price: number; public_price: boolean };
+  deal?: {
+    price: number;
+    public_price: boolean;
+    /**
+     * Optional. The hash of a code the seller tells the buyer apart from the
+     * link (lib/dealCode.ts). Paying needs it. `misses` counts wrong codes:
+     * after LIMITS.maxDealCodeMisses the deal takes no more payments.
+     */
+    code?: { hash: string; misses: number };
+  };
   /**
    * Order Flow: a batch sale. One seller offers `units` identical units; each
    * sealed order is for one unit; the highest orders win one each and each
