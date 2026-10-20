@@ -1,0 +1,21 @@
+# Keep secrets, local state and build output out of every image build.
+.git
+.github
+**/node_modules
+**/target
+**/.next
+**/*.tsbuildinfo
+**/.env
+**/.env.*
+!**/.env.example
+
+# Wallet seeds, signer state, auction records, evidence photos
+signer/data
+signer/data-*
+vault-web/data
+_to_delete
+**/_to_delete
+Claude outputs
+
+# Not needed to build the app
+scripts

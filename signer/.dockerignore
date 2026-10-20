@@ -1,0 +1,4 @@
+# Never send build output or wallet data into an image build.
+target/
+data/
+data-*/

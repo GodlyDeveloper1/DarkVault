@@ -679,6 +679,36 @@ digital lot the key goes to the winner by itself and the winner's window unlocks
 "It is what was described" there, and a second transaction pays the seller and returns both
 bonds.
 
+## Run it with Docker
+
+One command starts the signer, the house signer (practice auctions) and the web
+app. Testnet only.
+
+```
+copy .env.example .env        (then set VAULT_OPERATOR_KEY in .env)
+docker compose up --build
+```
+
+The site is then at http://127.0.0.1:3100. The first build takes 20 to 40
+minutes, because the signer compiles Zcash's proving code; later builds take
+seconds. Each signer makes a wallet of its own on first start and syncs from
+near the chain tip. Practice auctions start once the house purse holds testnet
+coins: `scripts\house.ps1 address` gives an address to fund it (set
+`VAULT_OPERATOR_KEY` in your shell to the same key as in `.env` first), and
+`scripts\house.ps1 status` shows what it holds.
+
+What is reachable:
+
+- Neither signer has a published port. They sit on a private network with the
+  web app, the only thing that can call them. They have no authentication:
+  never add a `ports:` entry to either.
+- The web app is published on 127.0.0.1 only. To host it, put a reverse proxy
+  (with HTTPS) in front of it and set `TRUST_PROXY=1`.
+- The wallets live in the `signer-data` and `house-data` volumes, the auction
+  records, receipt key and evidence photos in `web-data`. Back them up, and
+  never copy them anywhere public.
+- Every container restarts by itself if it stops (`restart: unless-stopped`).
+
 ## Web app settings
 
 | Variable | Default | Meaning |

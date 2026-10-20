@@ -1,0 +1,88 @@
+# Dark Vault with Docker. TESTNET ONLY.
+#
+#   docker compose up --build
+#       The app: the signer, the house signer and the web app, at http://127.0.0.1:3100.
+#       The first build takes 20-40 minutes (the signer compiles Zcash's proving code).
+#
+# Settings (in a .env file next to this one, or in your shell; see .env.example):
+#   VAULT_OPERATOR_KEY       the operator desk's key (/operator), 24 characters or more.
+#                            Leave it empty and the desk stays closed.
+#   WEB_PORT                 port on this machine for the web app (default 3100)
+#   LIGHTWALLETD_URL         light client server both signers sync through
+#                            (default https://testnet.zec.rocks:443)
+#   VAULT_MIN_CONFIRMATIONS  confirmations before a deposit can be spent (default 3)
+#   HOUSE_SIGNER_URL         set it to empty to switch practice auctions off
+#   TRUST_PROXY              set to 1 only behind your own reverse proxy
+#
+# Who can reach what:
+#   - Neither signer has a published port. They sit on a private network with
+#     the web app, which is the only thing that can call them. They have no
+#     authentication, so never add a `ports:` entry to either.
+#   - The web app is published on 127.0.0.1 only. To host it, put a reverse proxy
+#     in front (on the `front` network) rather than publishing it to the world.
+#   - Wallet seeds and wallet databases are in the `signer-data` and `house-data`
+#     volumes; auction records, the receipt key and evidence photos are in
+#     `web-data`. Back all three up. Never copy them anywhere public.
+
+services:
+  signer:
+    build: ./signer
+    init: true
+    restart: unless-stopped
+    environment:
+      SIGNER_BIND_ADDR: 0.0.0.0   # inside the container only; see "Who can reach what"
+      SIGNER_PORT: "8082"
+      LIGHTWALLETD_URL: ${LIGHTWALLETD_URL:-https://testnet.zec.rocks:443}
+      VAULT_MIN_CONFIRMATIONS: ${VAULT_MIN_CONFIRMATIONS:-3}
+    volumes:
+      - signer-data:/data
+    networks:
+      - signer    # the web app
+      - default   # the way out to the light client server
+
+  # The purse behind practice auctions: the same program, a wallet of its own.
+  house-signer:
+    build: ./signer
+    init: true
+    restart: unless-stopped
+    environment:
+      SIGNER_BIND_ADDR: 0.0.0.0
+      SIGNER_PORT: "8083"
+      LIGHTWALLETD_URL: ${LIGHTWALLETD_URL:-https://testnet.zec.rocks:443}
+      VAULT_MIN_CONFIRMATIONS: ${VAULT_MIN_CONFIRMATIONS:-3}
+    volumes:
+      - house-data:/data
+    networks:
+      - signer
+      - default
+
+  web:
+    build:
+      context: .
+      dockerfile: vault-web/Dockerfile
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - signer
+      - house-signer
+    environment:
+      SIGNER_URL: http://signer:8082
+      HOUSE_SIGNER_URL: ${HOUSE_SIGNER_URL-http://house-signer:8083}
+      VAULT_OPERATOR_KEY: ${VAULT_OPERATOR_KEY:-}
+      TRUST_PROXY: ${TRUST_PROXY:-}
+    volumes:
+      - web-data:/data
+    networks:
+      - signer
+      - front
+    ports:
+      - "127.0.0.1:${WEB_PORT:-3100}:3100"
+
+networks:
+  signer:   # signers <-> web app, nothing else
+  front:    # web app <-> a reverse proxy, when hosted
+
+volumes:
+  signer-data:
+  house-data:
+  web-data:
