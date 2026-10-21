@@ -223,6 +223,7 @@ the browser; `vault-core/src/delivery.ts`).
 | Check | The winner's browser opens the key, checks it against the hash and decrypts the lot. The winner looks at it and says whether it is what was described. | The winner confirms when it arrives. |
 | Payout | Confirmed, or no complaint within the time limit: the seller is paid. Not handed over in time: the winner is refunded. | The same. |
 | Wrong key | The winner hands over the bid's delivery key; the site repeats the check and refunds the winner if the key doesn't open the lot. No judgement call. | |
+| Not as described | Within 2 hours of the lot opening, the winner hands over the key to that one lot. The price stays held; the site asks both sides for proof, and the operator opens exactly what was delivered and decides. | The price stays held; the site asks both sides for proof and the operator decides. A winner who wins sends the item back first. |
 
 The site carries the public keys as well as the envelopes: the seller's browser seals to the
 key the site says is the winner's. A site that ran different code and swapped that key for
@@ -230,7 +231,6 @@ one of its own could open what was sealed to it. The site as written never does,
 winner would see at once that their own key opens nothing; but it is the site's honesty,
 not mathematics, that this rests on. (Putting each bid's delivery key on the public board,
 under the signed receipt, would let both sides check it. Not built yet.)
-| Not as described | The winner hands over the key to that one lot. The price stays held; the operator opens exactly what was delivered, reads both sides and decides (`scripts/operator.ps1`). | The price stays held; the operator reads both sides and decides. |
 
 A third kind of lot is **a promise**: something the seller will do for the winner, such as
 naming rights or an hour of their time. It runs like a physical lot. Where a postal address
@@ -267,9 +267,11 @@ Escrow alone means a cheat only fails to gain. Bonds make them lose.
 | Seller never handed over, sent a wrong key, or lost a dispute | winner | **winner** | winner |
 | Winner opened a dispute and lost it | seller | seller | **seller** |
 | Winner never said where to send a posted lot | winner | seller | **seller** |
-| Operator finds nobody at fault | as decided | seller | winner |
-| Split, by the operator or agreed between the two | shared by the percentage | seller | winner |
-| The operator did not decide within the deadline | winner | seller | winner |
+| A side asked for proof sent none in time | to the other side, as if it lost | as if it lost | as if it lost |
+| Winner won a dispute over a posted item, posted it back | winner | **winner** | winner |
+| Winner won, but never posted the item back | seller | seller | **seller** |
+| Parcel lost, damaged or held in the post | winner | seller | winner |
+| Nobody decided in time, or neither side sent proof | winner | seller | winner |
 | Lot did not sell | | seller | |
 
 Every row pays out exactly what the escrow vault holds (`planEscrowPayout` in `vault-core`).
@@ -278,39 +280,55 @@ What this does not solve, and says so: the site can prove the right key was deli
 that a file is what the description promised; a dispute over a posted item needs a human; a
 refund after a failed delivery is the price minus two network fee shares; and the site holds
 the price while it is in escrow, as it holds deposits during bidding. A one-time code (a gift
-card, a licence key) can't be proven used or unused by anyone, so for those the rule is: if the
-delivered code matches the description, the sale stands. Sellers and bidders are anonymous, so
+card, a licence key) can't be proven used or unused by anyone. For those the winner has 2 hours
+from when the lot opens to complain, both sides are asked for proof (the error on screen, the
+receipt of purchase), and when neither proof is better the seller wins, since the winner keeps
+the code and can't give it back. Sellers and bidders are anonymous, so
 there is no reputation; the bonds are what a cheat has to lose. A seller whose lot doesn't sell
 gets the bond back minus one network fee.
 
-### Disputes: settled between the two, or by the operator, never left hanging
+### Disputes: decided on proof, one side wins, never left hanging
 
-The same rules in every market (auctions, deals, and each unit of an Order Flow sale):
+The same rules in every market (auctions, deals, and each unit of an Order Flow sale). The
+public version is the **Dispute Rules** page (`/rules`), linked from every dispute.
 
-- **A parcel gets time to arrive.** For a physical lot the time to complain after "shipped" is
-  never under a week (`VAULT_MIN_PHYSICAL_COMPLAINT_SEC`), whatever the seller chose, so a
-  seller can't mark it shipped at once and be paid before the box is opened. The winner can
-  press **Not Arrived Yet** once, which adds the same time again.
-- **Settle it yourselves.** During a dispute the seller can offer part of the price back (1% to
-  100%) and change or withdraw the offer. If the winner accepts, it ends there, with nobody at
-  fault: the winner gets that share and their bond, the seller the rest and their bond.
-- **Evidence photos.** Each side can add up to three photos (what arrived, the packaging, a
-  receipt of posting). They are cleaned in the browser like listing photos, checked again by
-  the site (`cleanJpeg`), shown only to the operator, and deleted once the payout is made. The
-  page reminds people to cover any name or address label first.
-- **The operator decides** on a private page, `/operator`, linked from nowhere: without the
+- **Time to complain.** A parcel gets at least a week after "shipped"
+  (`VAULT_MIN_PHYSICAL_COMPLAINT_SEC`), whatever the seller chose, so a seller can't mark it
+  shipped and be paid before the box is opened. **Not Arrived Yet** adds 3 days, once
+  (`VAULT_EXTEND_SEC`): enough for a slow parcel, too little to hold the seller's money for
+  weeks. A digital lot must be checked at once: 2 hours from when the winner's browser first
+  fetched it (`VAULT_DIGITAL_COMPLAINT_SEC`).
+- **Proof, asked for by the site.** When a dispute opens, both sides see **Dark Vault Needs
+  Proof**, with what to show and 48 hours to answer (`VAULT_PROOF_SEC`): photos (up to three,
+  cleaned in the browser like listing photos, checked again by the site, shown only to the
+  operator, deleted once the payout is made) and a short note. **A side that sends nothing in
+  time loses.** If neither answers, everyone's own money goes back. The operator can ask either
+  side again; neither side is told a person reads it.
+- **One side wins the whole dispute.** No splits and no offers. The seller wins: they are paid,
+  with the winner's bond. The winner wins: the price comes back, with the seller's bond.
+- **Returns.** When the winner wins a dispute over a posted item, it goes back before the
+  refund, so nobody keeps both the item and the money. The seller gives a return address,
+  sealed so only the winner can read it (48 hours; none, and the winner is refunded and keeps
+  it). The winner posts it back with an optional tracking note sealed to the seller (5 days;
+  not posted, and the seller is paid with the winner's bond). The seller confirms it is back,
+  or says nothing for 7 days, and the winner is refunded with the seller's bond. If the seller
+  says what came back is wrong, both sides are asked for proof again.
+- **Lost in the post.** A parcel lost, damaged or held at customs is nobody's lie: the winner
+  is refunded and each side gets its own bond back.
+- **The operator** decides on a private page, `/operator`, linked from nowhere: without the
   operator key it shows a key box and every request behind it answers "not found". It lists
-  every open dispute with the complaint, the seller's answer, any standing offer, the photos,
-  and (for a digital lot) the delivered item. The operator can release, refund, or **split**
-  the price by a percentage; release and refund can also be marked "nobody at fault".
-- **A deadline for the operator.** A dispute not decided within a week
-  (`VAULT_DISPUTE_DECIDE_SEC`) ends as a refund with nobody at fault, so an absent operator
-  can't trap anyone's money.
+  every open dispute in all three markets with the complaint, each side's proof, the photos,
+  any return under way, and (for a digital lot) the delivered item, with **Ask The Buyer**,
+  **Ask The Seller**, **Seller Wins**, **Buyer Wins**, **Buyer Wins, Return First** and **Lost
+  In The Post** (also `scripts\operator.ps1`).
+- **A deadline.** A dispute not decided within 72 hours (`VAULT_DISPUTE_DECIDE_SEC`, pushed back
+  by a later request for proof) ends with everyone's own money going back, so an absent
+  operator can't trap anyone's money.
 - **The site's own addresses are refused** as refund and payout addresses (found on testnet: a
   pasted escrow address sent a refund back into the escrow).
 
-What is still true: the operator has to be trusted to judge fairly, and a physical dispute is
-one side's word, and photos, against the other's.
+What is still true: the operator has to be trusted to judge fairly, and a dispute is one side's
+proof against the other's.
 
 ### Listing photos: cleaned in the seller's browser
 
@@ -463,6 +481,13 @@ with the page, and every API route answers a browser without the link as it woul
 that doesn't exist. A locked page says the same thing for a private auction and a deal, at
 either address, so even someone who has an id can't tell which it is. As with a private auction, a buyer who opens a dispute hands the operator the key to
 the terms (to that text and nothing else), so the dispute can be judged.
+
+**A Deal Code, so a forwarded link can't take the deal.** The link alone lets anyone who has it
+pay first and take the deal. The seller can add a short code and tell it to the buyer apart
+from the link (by phone, say); paying then needs both. Neither the code nor the link's key
+reaches the site: the buyer's browser sends `sha256("dark-vault/deal-code:" + invite + ":" +
+code)`, which the site stores hashed again. After 10 wrong codes (`maxDealCodeMisses`) the deal
+takes no more payments, and the seller makes a new one (`lib/dealCode.ts`).
 
 **The ledger can't be watched to time a deal.** A deal that shows its price joins the ledger
 only when it has completed and its payout is in a block, and then only when the day's batch
@@ -709,6 +734,20 @@ What is reachable:
   never copy them anywhere public.
 - Every container restarts by itself if it stops (`restart: unless-stopped`).
 
+### Hosting it
+
+`deploy/setup.sh` puts it on a fresh Ubuntu 24.04 server with HTTPS: Docker,
+a firewall that lets in only SSH, HTTP and HTTPS, a fresh operator key made on
+the server, and [Caddy](https://caddyserver.com/) in front for the certificate.
+Point the domain at the server first, then:
+
+```
+curl -fsSL https://raw.githubusercontent.com/GodlyDeveloper1/DarkVault/main/deploy/setup.sh -o setup.sh
+sudo bash setup.sh yourdomain.example
+```
+
+Run it again to update to the latest code; wallets, records and keys are kept.
+
 ## Web app settings
 
 | Variable | Default | Meaning |
@@ -724,7 +763,11 @@ What is reachable:
 | `VAULT_LEDGER_BATCH_SEC` | `86400` | How often completed deals that show their price are added to the public ledger (batches close on a fixed clock, so a deal can't be timed). Shorter only for tests and demos |
 | `VAULT_MIN_DELIVERY_SEC` | `3600` | Shortest handover and complaint time limits a seller can set |
 | `VAULT_MIN_PHYSICAL_COMPLAINT_SEC` | `604800` | A physical lot's shortest time to complain after "shipped" (one week), whatever the seller chose. Shorten it only for a demo |
-| `VAULT_DISPUTE_DECIDE_SEC` | `604800` | An open dispute the operator hasn't decided in this time ends as a refund with nobody at fault |
+| `VAULT_DISPUTE_DECIDE_SEC` | `259200` | An open dispute not decided in this time ends with everyone's own money going back (pushed back by a later request for proof) |
+| `VAULT_PROOF_SEC` | `172800` | How long a side has to answer a request for proof; silence loses the dispute |
+| `VAULT_EXTEND_SEC` | `259200` | What Not Arrived Yet adds to a parcel's time to complain, once |
+| `VAULT_DIGITAL_COMPLAINT_SEC` | `7200` | How long a winner has, once a digital lot has opened, to say it is not what was described |
+| `VAULT_RETURN_ADDRESS_SEC`, `VAULT_RETURN_SEND_SEC`, `VAULT_RETURN_CONFIRM_SEC` | `172800`, `432000`, `604800` | A return: the seller's time to give an address, the winner's to post it back, the seller's to confirm it arrived |
 | `VAULT_OPERATOR_KEY` | unset | Turns on the operator's routes: disputes and the house purse. 24 characters or more. Keep it secret |
 | `HOUSE_SIGNER_URL` | unset | The house signer, for practice auctions and practice wallets. Unset: the site has neither |
 | `VAULT_PRACTICE_DURATION_SEC` | `480` | How long a practice auction takes bids |

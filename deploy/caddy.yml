@@ -1,0 +1,31 @@
+# Added to docker-compose.yml when hosting (deploy/setup.sh does this):
+#   docker compose -f docker-compose.yml -f deploy/caddy.yml up -d --build
+# Caddy is the only thing reachable from the internet, on ports 80 and 443.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - web
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - front
+
+  web:
+    environment:
+      # Behind Caddy: rate limits per visitor, not one limit shared by everyone.
+      TRUST_PROXY: "1"
+
+volumes:
+  caddy-data:
+  caddy-config:
