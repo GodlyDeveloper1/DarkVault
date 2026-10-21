@@ -1,8 +1,7 @@
 # Caddy in front of Dark Vault: HTTPS for the domain, certificates renewed by
 # itself. It keeps no access log (Caddy logs requests only when told to).
-{
-	email {$ACME_EMAIL}
-}
+# No global email: Caddy gets certificates without one, and an empty
+# ACME_EMAIL there made Caddy refuse to start.
 
 {$DOMAIN} {
 	encode zstd gzip
