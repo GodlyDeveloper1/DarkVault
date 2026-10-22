@@ -8,6 +8,14 @@
 	# The visitor's address goes to the web app only as the last X-Forwarded-For
 	# entry, for its in-memory rate limits (TRUST_PROXY=1). Nothing logs it.
 	reverse_proxy web:3100
+	# The 3D objects, the preview picture and the icons never change under the
+	# same name, but the app sends them as "check again every time", so every
+	# visit asked for each one again. Browsers may keep them for a week (the
+	# preview picture for a day). The ">" sets it on the app's answer.
+	@art path /art/* /icon.svg /apple-icon.png
+	header @art >Cache-Control "public, max-age=604800"
+	@share path /og.jpg
+	header @share >Cache-Control "public, max-age=86400"
 	header {
 		-Server
 		Strict-Transport-Security "max-age=31536000"
