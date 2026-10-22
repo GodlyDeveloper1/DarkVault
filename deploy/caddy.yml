@@ -25,6 +25,8 @@ services:
     environment:
       # Behind Caddy: rate limits per visitor, not one limit shared by everyone.
       TRUST_PROXY: "1"
+      # The site's own address, for the link preview card (see app/layout.tsx).
+      SITE_URL: https://${DOMAIN:?set DOMAIN in .env}
 
 volumes:
   caddy-data:

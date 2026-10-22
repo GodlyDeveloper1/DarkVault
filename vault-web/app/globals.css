@@ -2936,6 +2936,71 @@ h3 small {
   justify-self: center;
 }
 
+/* --- The home page's preloader (see the script in layout.tsx) --------------- */
+.preload {
+  display: none;
+}
+html.dv-preload .preload,
+html.dv-preload-out .preload {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: var(--bg);
+}
+html.dv-preload-out .preload {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.5s ease;
+}
+html.dv-preload body {
+  overflow: hidden;
+}
+/* Everything on the page waits, at its first frame, until the cover comes down. */
+html.dv-preload .land *,
+html.dv-preload .land *::before,
+html.dv-preload .land *::after {
+  animation-play-state: paused !important;
+}
+.preload-bar {
+  display: block;
+  width: 180px;
+  height: 6px;
+  margin: 2px 0 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.preload-bar i {
+  display: block;
+  height: 100%;
+  background: var(--lime);
+  transform-origin: left;
+  /* Creeps along while the page loads, and fills as the cover comes down. */
+  animation: preload-fill 6s cubic-bezier(0.1, 0.7, 0.3, 1) both;
+}
+html.dv-preload-out .preload-bar i {
+  animation: none;
+  transform: scaleX(1);
+  transition: transform 0.2s ease;
+}
+@keyframes preload-fill {
+  from {
+    transform: scaleX(0.04);
+  }
+  to {
+    transform: scaleX(0.9);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.dv-preload-out .preload {
+    transition: none;
+  }
+}
+
 /* The "hide my bid" choice on the bid form. */
 .hide-bid {
   margin: 16px 0 2px;
