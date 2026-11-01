@@ -32,6 +32,7 @@ import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
 import type { PickedPhoto } from "@/lib/photoClient";
 import { addressProblem } from "@/lib/wallet";
+import { COIN, UA_PREFIX, WALLET_WORD } from "@/lib/network";
 
 const DURATIONS: [string, number][] = [
   ["15 minutes", 15 * 60],
@@ -105,7 +106,7 @@ export default function NewSale() {
               : null;
   const priceZat = parseCoins(price);
   const priceProblem =
-    priceZat === null ? "Enter an amount like 0.01." : priceZat < MIN_BID ? `The lowest price must be at least ${formatCoins(MIN_BID)} TAZ.` : priceZat > BATCH_MAX_ORDER ? "That is more than one order can be." : null;
+    priceZat === null ? "Enter an amount like 0.01." : priceZat < MIN_BID ? `The lowest price must be at least ${formatCoins(MIN_BID)} ${COIN}.` : priceZat > BATCH_MAX_ORDER ? "That is more than one order can be." : null;
   const count = unitsProblem ? 0 : units.length;
   const perUnit = priceZat !== null && !priceProblem ? bondFor(priceZat, bondPercent) : 0;
   const minBond = perUnit * Math.max(count, BATCH_MIN_UNITS);
@@ -174,7 +175,7 @@ export default function NewSale() {
               <h3>Orders Open When Your Bond Arrives</h3>
               <p className="small" style={{ margin: 0 }}>
                 Save your seller link below, then press <strong>Open The Sale</strong>. The page shows where to send your bond of{" "}
-                <strong>{formatCoins(made.bond)} TAZ</strong>, for all {made.units} units. The sale&apos;s time starts when it arrives, not now.
+                <strong>{formatCoins(made.bond)} {COIN}</strong>, for all {made.units} units. The sale&apos;s time starts when it arrives, not now.
               </p>
             </div>
           )}
@@ -279,12 +280,12 @@ export default function NewSale() {
             )}
           </p>
 
-          <label htmlFor="price">Lowest Price For One Unit (TAZ)</label>
+          <label htmlFor="price">Lowest Price For One Unit ({COIN})</label>
           <input id="price" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} />
           <p className={priceProblem ? "hint error" : "hint"} id="price-effect">
             {priceProblem ??
               `The least you'll accept for a unit. It is public, and no order below it can win. The highest orders win a unit each, and each buyer pays what they offered${
-                perUnit > 0 ? `, plus a bond of ${formatCoins(perUnit)} TAZ that comes back to them` : ""
+                perUnit > 0 ? `, plus a bond of ${formatCoins(perUnit)} ${COIN} that comes back to them` : ""
               }.`}
           </p>
 
@@ -320,7 +321,7 @@ export default function NewSale() {
               <span className="label-like">Your Bond, For The Whole Sale</span>
               <BondFixed amount={minBond} of="the lowest price" each={perUnit} units={Math.max(count, BATCH_MIN_UNITS)} />
               <p className="hint" id="bond-effect">
-                {`A deposit you make before orders open: ${formatCoins(perUnit)} TAZ for each unit. The share of every unit that doesn't sell comes straight back, and each sold unit's share comes back with its payment. You lose a unit's share to its buyer if you don't hand that unit over or lose a dispute about it. Anything you send above it comes straight back.`}
+                {`A deposit you make before orders open: ${formatCoins(perUnit)} ${COIN} for each unit. The share of every unit that doesn't sell comes straight back, and each sold unit's share comes back with its payment. You lose a unit's share to its buyer if you don't hand that unit over or lose a dispute about it. Anything you send above it comes straight back.`}
               </p>
             </>
           )}
@@ -350,8 +351,8 @@ export default function NewSale() {
           </div>
 
           <label htmlFor="payout">Your Shielded Payout Address</label>
-          <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
-          <p className={payoutProblem ? "hint error" : "hint"}>{payoutProblem ?? "A fresh unified address from your testnet wallet. Only this site sees it; it is never published."}</p>
+          <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder={`${UA_PREFIX}…`} spellCheck={false} autoComplete="off" />
+          <p className={payoutProblem ? "hint error" : "hint"}>{payoutProblem ?? `A fresh unified address from your ${WALLET_WORD} wallet. Only this site sees it; it is never published.`}</p>
 
           {error && <p className="error">{error}</p>}
           <div className="row" style={{ marginTop: 20 }}>

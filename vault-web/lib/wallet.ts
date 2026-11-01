@@ -12,6 +12,7 @@
 // Nothing in this file talks to the server. The saved address is sent only when
 // the bidder places a bid with it, exactly as if they had pasted it.
 import { announce } from "./tickets";
+import { MAINNET, UA_PREFIX } from "@/lib/network";
 
 export interface Wallet {
   kind: "own";
@@ -53,9 +54,11 @@ export function addressProblem(address: string): string | null {
   const a = address.trim();
   if (a === "") return null;
   if (/^(t1|t3|tm|t2)/.test(a)) return "That is a transparent address. Refunds only go to shielded addresses.";
-  if (/^u1/.test(a)) return "That is a mainnet address. Dark Vault runs on the Zcash testnet (addresses start with utest1).";
-  if (/^(zs|ztestsapling)/.test(a)) return "That is a Sapling address. Use a unified address (it starts with utest1).";
-  if (!/^utest1[02-9ac-hj-np-z]{60,}$/.test(a)) return "That doesn't look like a testnet unified address (it starts with utest1).";
+  if (!MAINNET && /^u1/.test(a)) return "That is a mainnet address. Dark Vault runs on the Zcash testnet (addresses start with utest1).";
+  if (MAINNET && /^utest1/.test(a)) return "That is a testnet address. This copy of Dark Vault runs on Zcash mainnet (addresses start with u1).";
+  if (/^(zs|ztestsapling)/.test(a)) return `That is a Sapling address. Use a unified address (it starts with ${UA_PREFIX}).`;
+  const shape = MAINNET ? /^u1[02-9ac-hj-np-z]{60,}$/ : /^utest1[02-9ac-hj-np-z]{60,}$/;
+  if (!shape.test(a)) return `That doesn't look like a ${MAINNET ? "mainnet" : "testnet"} unified address (it starts with ${UA_PREFIX}).`;
   return null;
 }
 

@@ -25,6 +25,7 @@ import Countdown from "@/app/components/Countdown";
 import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
 import PayLink from "@/app/components/PayLink";
+import PayAnywhere from "@/app/components/PayAnywhere";
 import { SellerDelivery, WinnerDelivery } from "@/app/auction/[id]/Delivery";
 import { CODE_MIN, dealCodeHash, normalCode } from "@/lib/dealCode";
 import { headersOf, inviteFor, inviteHeaders } from "@/lib/invites";
@@ -32,6 +33,7 @@ import { sellerKeyFor } from "@/lib/sellerKey";
 import { loadTickets, parseTicketFile, saveTicket, ticketFile, tokenOf, type Ticket } from "@/lib/tickets";
 import { addressProblem, loadWallet, OPEN_EVENT, paymentRequest } from "@/lib/wallet";
 import type { BidView, PublicAuction, SellerView } from "@/lib/views";
+import { COIN, MAINNET, UA_PREFIX, WALLET_WORD } from "@/lib/network";
 
 const clock = (ms: number) => new Date(ms).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
@@ -242,11 +244,11 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
           <span className="muted small">{finished && sold && stage !== "refunded" ? "Settled For" : "The Price"}</span>
           <div className="big">
             <span className="price" id="deal-price">
-              {formatCoins(price)} TAZ
+              {formatCoins(price)} {COIN}
             </span>
           </div>
           <span className="muted small" id="deal-clock-line">
-            {deal.state === "funding" && <>Not open yet. The deal opens for payment when the seller&apos;s bond of {formatCoins(sellerBond)} TAZ has arrived.</>}
+            {deal.state === "funding" && <>Not open yet. The deal opens for payment when the seller&apos;s bond of {formatCoins(sellerBond)} {COIN} has arrived.</>}
             {deal.state === "open" && (
               <>
                 This offer stands for <Countdown to={deal.ends_at} offset={offset} onDone={() => void refresh()} />. The first payment in full takes it.
@@ -276,11 +278,11 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
           </span>
           {deal.state === "open" && (
             <p className="clock-min" id="deal-to-pay">
-              The buyer pays: <strong>{formatCoins(toPay)} TAZ</strong>
+              The buyer pays: <strong>{formatCoins(toPay)} {COIN}</strong>
               {buyerBond > 0 && (
                 <>
                   <br />
-                  The price + a {formatCoins(buyerBond)} TAZ bond that comes back
+                  The price + a {formatCoins(buyerBond)} {COIN} bond that comes back
                 </>
               )}
             </p>
@@ -288,7 +290,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
           <div className="stats">
             <div>
               <b>{formatCoins(price)}</b>
-              <span>price (TAZ)</span>
+              <span>price ({COIN})</span>
             </div>
             <div>
               <b>{formatCoins(sellerBond)}</b>
@@ -341,7 +343,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
               )}
               {seller.bond && deal.state !== "funding" && !seller.proceeds && !finished && (
                 <p className="small muted" id="bond-status">
-                  Your bond of {formatCoins(seller.bond.required)} TAZ is held. It comes back with your payment, or when the offer runs out. You lose it
+                  Your bond of {formatCoins(seller.bond.required)} {COIN} is held. It comes back with your payment, or when the offer runs out. You lose it
                   to the buyer if you don&apos;t deliver or lose a dispute.
                 </p>
               )}
@@ -353,7 +355,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
               {seller.proceeds ? (
                 <dl className="kv" id="seller-result">
                   <dt>{sold && stage !== "refunded" ? "Sent To You, After Network Fees" : "Your Bond, Returned After The Network Fee"}</dt>
-                  <dd>{formatCoins(seller.proceeds.paid)} TAZ</dd>
+                  <dd>{formatCoins(seller.proceeds.paid)} {COIN}</dd>
                   <dt>To</dt>
                   <dd>{seller.payout_address}</dd>
                   <dt>Transaction ({seller.proceeds.status})</dt>
@@ -444,7 +446,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
               <div className="stakes">
                 <div>
                   <span className="muted small">The Seller&apos;s Bond</span>
-                  <b className="mono">{formatCoins(sellerBond)} TAZ</b>
+                  <b className="mono">{formatCoins(sellerBond)} {COIN}</b>
                   <p className="small muted">
                     Paid in before the deal opened. The seller loses it to the buyer if they don&apos;t {d?.kind === "promise" ? "keep the promise" : "hand over"}{" "}
                     in time, or lose a dispute.
@@ -452,7 +454,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
                 </div>
                 <div>
                   <span className="muted small">The Buyer&apos;s Bond</span>
-                  <b className="mono">{formatCoins(buyerBond)} TAZ</b>
+                  <b className="mono">{formatCoins(buyerBond)} {COIN}</b>
                   <p className="small muted">
                     Paid with the price. The buyer loses it to the seller if they open a dispute and lose it
                     {d?.kind === "digital" ? "" : d?.kind === "promise" ? ", or never say what they want" : ", or never say where to send it"}.
@@ -481,7 +483,7 @@ export default function DealRoom({ initial, serverNow }: { initial: PublicAuctio
             {d && (
               <p className="muted small" style={{ margin: "10px 0 0" }} id="deal-limits">
                 <strong style={{ color: "var(--text)" }}>Time limits.</strong> {span(d.deliver_seconds)} to hand over, then {span(d.dispute_seconds)} for the buyer to
-                open a dispute. The site keeps nothing: each payment carries an equal share of the network fee (about 0.00005 TAZ).
+                open a dispute. The site keeps nothing: each payment carries an equal share of the network fee (about 0.00005 {COIN}).
               </p>
             )}
           </div>
@@ -502,7 +504,7 @@ function BondFunding({ bond }: { bond: NonNullable<SellerView["bond"]> }) {
   return (
     <div id="bond-funding" style={{ marginBottom: 12 }}>
       <p className="small" style={{ marginBottom: 10 }}>
-        <strong>Fund your bond to open the deal.</strong> Send <strong>{formatCoins(bond.required)} TAZ</strong> from a shielded balance to the address
+        <strong>Fund your bond to open the deal.</strong> Send <strong>{formatCoins(bond.required)} {COIN}</strong> from a shielded balance to the address
         below, with no memo. The deal opens for payment when it is in a block. You get it back with your payment, or when the offer runs out; you lose
         it to the buyer if you don&apos;t deliver or lose a dispute.
       </p>
@@ -520,10 +522,11 @@ function BondFunding({ bond }: { bond: NonNullable<SellerView["bond"]> }) {
             {received >= bond.required
               ? "Received. Opening the deal…"
               : received > 0
-                ? `${formatCoins(received)} TAZ has arrived; ${formatCoins(bond.required - received)} TAZ more is needed.`
+                ? `${formatCoins(received)} ${COIN} has arrived; ${formatCoins(bond.required - received)} ${COIN} more is needed.`
                 : "Nothing has arrived yet."}{" "}
             If the bond is not here by {clock(bond.wait_until)}, the deal is cancelled.
           </p>
+          {MAINNET && received < bond.required && <PayAnywhere to={bond.address} zat={bond.required - received} />}
         </div>
       </div>
     </div>
@@ -602,14 +605,14 @@ function AcceptForm({ deal, toPay, onAccepted }: { deal: PublicAuction; toPay: n
         it, and the money goes into escrow, not to the seller.
       </p>
       <div className="deposit-math" id="accept-math">
-        <strong>You will send {formatCoins(toPay)} TAZ.</strong>
+        <strong>You will send {formatCoins(toPay)} {COIN}.</strong>
         <ul>
           <li>
-            <strong>{formatCoins(price)} TAZ</strong> is the price. It is held until the handover, then released to the seller.
+            <strong>{formatCoins(price)} {COIN}</strong> is the price. It is held until the handover, then released to the seller.
           </li>
           {bond > 0 && (
             <li>
-              <strong>{formatCoins(bond)} TAZ</strong> is your bond. It comes back when the deal completes. You lose it only if you open a dispute and
+              <strong>{formatCoins(bond)} {COIN}</strong> is your bond. It comes back when the deal completes. You lose it only if you open a dispute and
               lose it.
             </li>
           )}
@@ -617,11 +620,11 @@ function AcceptForm({ deal, toPay, onAccepted }: { deal: PublicAuction; toPay: n
         </ul>
       </div>
       <label htmlFor="accept-refund">Your Shielded Refund Address</label>
-      <input id="accept-refund" className="mono" value={refund} onChange={(e) => setRefund(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
+      <input id="accept-refund" className="mono" value={refund} onChange={(e) => setRefund(e.target.value)} placeholder={`${UA_PREFIX}…`} spellCheck={false} autoComplete="off" />
       <p className={problem ? "hint error" : "hint"}>
         {problem ?? (
           <>
-            A fresh unified address from your testnet wallet. Your bond, or a refund, comes back here.{" "}
+            A fresh unified address from your {WALLET_WORD} wallet. Your bond, or a refund, comes back here.{" "}
             <button type="button" className="link small" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
               Connect a wallet
             </button>{" "}
@@ -697,7 +700,7 @@ function MyPayment({
     <div className={`card ${standing === "won" ? "accent" : ""}`} id="pay-card" data-payment={ticket.bid_id}>
       <div className="row spread">
         <h3 style={{ margin: 0 }}>Your Payment</h3>
-        <strong className="mono">{formatCoins(toPay)} TAZ</strong>
+        <strong className="mono">{formatCoins(toPay)} {COIN}</strong>
       </div>
 
       {deal.state === "open" && !enough && !payTo && (
@@ -709,8 +712,8 @@ function MyPayment({
         <>
           <p className="small" style={{ marginTop: 12 }} id="pay-it">
             <strong>{funded ? "Part of it has arrived." : "Now pay."}</strong> Send{" "}
-            <strong>{formatCoins(funded ? toPay - deposit!.total : toPay)} TAZ</strong> from a shielded balance to the address below, with no memo. It
-            was made for you alone. That is the price{bond > 0 && <> plus your {formatCoins(bond)} TAZ bond</>}. Less would not take the deal; more is
+            <strong>{formatCoins(funded ? toPay - deposit!.total : toPay)} {COIN}</strong> from a shielded balance to the address below, with no memo. It
+            was made for you alone. That is the price{bond > 0 && <> plus your {formatCoins(bond)} {COIN} bond</>}. Less would not take the deal; more is
             fine, and comes back.
           </p>
           <div className="row" style={{ alignItems: "flex-start" }}>
@@ -723,9 +726,10 @@ function MyPayment({
                 <Copy text={uri} label="Copy Payment Request" />
               </div>
               <p className="hint">
-                The button opens your Zcash wallet app with this address and {formatCoins(toPay)} TAZ filled in. No wallet app on this device? Scan the
+                The button opens your Zcash wallet app with this address and {formatCoins(toPay)} {COIN} filled in. No wallet app on this device? Scan the
                 code with your phone.
               </p>
+              {MAINNET && <PayAnywhere to={payTo} zat={funded ? toPay - deposit!.total : toPay} />}
             </div>
           </div>
         </>
@@ -738,7 +742,7 @@ function MyPayment({
             ? "checking…"
             : !funded
               ? "not seen yet"
-              : `${formatCoins(deposit.total)} TAZ · ${Math.min(deposit.confirmations, deposit.needed)} of ${deposit.needed} confirmations`}
+              : `${formatCoins(deposit.total)} ${COIN} · ${Math.min(deposit.confirmations, deposit.needed)} of ${deposit.needed} confirmations`}
         </dd>
         <dt>Refund Address</dt>
         <dd>{view?.refund_address ?? "…"}</dd>
@@ -761,7 +765,7 @@ function MyPayment({
             <dl className="kv" key={p.txid + p.kind}>
               <dt>{p.kind === "winner-change" ? "Returned Above The Price And Bond" : p.late ? "Late Payment Returned" : "Returned To You"}</dt>
               <dd>
-                {formatCoins(p.paid)} TAZ <span className="muted">(after {formatCoins(p.owed - p.paid)} fee share)</span>
+                {formatCoins(p.paid)} {COIN} <span className="muted">(after {formatCoins(p.owed - p.paid)} fee share)</span>
               </dd>
               <dt>Transaction ({p.status})</dt>
               <dd>

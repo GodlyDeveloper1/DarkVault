@@ -34,6 +34,7 @@ import Qr from "@/app/components/Qr";
 import { rememberInvite } from "@/lib/invites";
 import type { PickedPhoto } from "@/lib/photoClient";
 import { addressProblem } from "@/lib/wallet";
+import { COIN, UA_PREFIX, WALLET_WORD } from "@/lib/network";
 
 const OFFERS: [string, number][] = [
   ["30 minutes", 30 * 60],
@@ -82,7 +83,7 @@ export default function NewDeal() {
   }, []);
 
   const priceZat = parseCoins(price);
-  const priceProblem = price.trim() === "" ? null : priceZat === null ? "Enter an amount like 0.5." : priceZat < MIN_BID ? `The price must be at least ${formatCoins(MIN_BID)} TAZ.` : null;
+  const priceProblem = price.trim() === "" ? null : priceZat === null ? "Enter an amount like 0.5." : priceZat < MIN_BID ? `The price must be at least ${formatCoins(MIN_BID)} ${COIN}.` : null;
   const itemProblem =
     kind !== "digital"
       ? null
@@ -176,7 +177,7 @@ export default function NewDeal() {
               <h3>The Deal Opens When Your Bond Arrives</h3>
               <p className="small" style={{ margin: 0 }}>
                 Save your seller link below, then press <strong>Open The Deal</strong>. The page shows where to send your bond of{" "}
-                <strong>{formatCoins(made.bond)} TAZ</strong>. The buyer can pay once it is in a block.
+                <strong>{formatCoins(made.bond)} {COIN}</strong>. The buyer can pay once it is in a block.
               </p>
             </div>
           )}
@@ -272,10 +273,10 @@ export default function NewDeal() {
 
           <PhotoPicker photos={photos} onChange={setPhotos} sealed />
 
-          <label htmlFor="price">The Price (TAZ)</label>
+          <label htmlFor="price">The Price ({COIN})</label>
           <input id="price" inputMode="decimal" value={price} onChange={(e) => setPrice(e.target.value)} placeholder="0.5" />
           <p className={priceProblem ? "hint error" : "hint"} id="price-effect">
-            {priceProblem ?? `One fixed price. The buyer pays exactly this${minBond > 0 ? `, plus a bond of ${formatCoins(minBond)} TAZ that comes back to them` : ""}. The site is told the price, because it holds it in escrow.`}
+            {priceProblem ?? `One fixed price. The buyer pays exactly this${minBond > 0 ? `, plus a bond of ${formatCoins(minBond)} ${COIN} that comes back to them` : ""}. The site is told the price, because it holds it in escrow.`}
           </p>
 
           <label style={{ marginBottom: 8 }}>What Is Handed Over?</label>
@@ -359,7 +360,7 @@ export default function NewDeal() {
               <span className="label-like">Your Bond</span>
               <BondFixed amount={minBond} of="the price" />
               <p className="hint">
-                {`A deposit you make before the deal opens. You get it back with your payment, or when the offer runs out. You lose it to the buyer if you don't deliver or lose a dispute. The buyer puts down the same ${formatCoins(minBond)} TAZ on the same terms. Anything you send above it comes straight back.`}
+                {`A deposit you make before the deal opens. You get it back with your payment, or when the offer runs out. You lose it to the buyer if you don't deliver or lose a dispute. The buyer puts down the same ${formatCoins(minBond)} ${COIN} on the same terms. Anything you send above it comes straight back.`}
               </p>
             </>
           )}
@@ -375,8 +376,8 @@ export default function NewDeal() {
           <p className="hint">How long the buyer has to pay, counted from when your bond arrives. After that the deal closes and your bond comes back.</p>
 
           <label htmlFor="payout">Your Shielded Payout Address</label>
-          <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
-          <p className={payoutProblem ? "hint error" : "hint"}>{payoutProblem ?? "A fresh unified address from your testnet wallet. Only this site sees it; it is never published."}</p>
+          <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder={`${UA_PREFIX}…`} spellCheck={false} autoComplete="off" />
+          <p className={payoutProblem ? "hint error" : "hint"}>{payoutProblem ?? `A fresh unified address from your ${WALLET_WORD} wallet. Only this site sees it; it is never published.`}</p>
 
           <label htmlFor="deal-code">Deal Code (Optional)</label>
           <input id="deal-code" className="mono" value={dealCode} maxLength={40} onChange={(e) => setDealCode(e.target.value)} placeholder="For example: BLUE-7731" spellCheck={false} autoComplete="off" />

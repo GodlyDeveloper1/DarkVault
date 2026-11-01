@@ -38,6 +38,7 @@ import PhotoPicker from "@/app/components/PhotoPicker";
 import Qr from "@/app/components/Qr";
 import { rememberInvite, shareLink } from "@/lib/invites";
 import type { PickedPhoto } from "@/lib/photoClient";
+import { COIN, UA_PREFIX, WALLET_WORD } from "@/lib/network";
 
 const DURATIONS: [string, number][] = [
   ["15 minutes", 15 * 60],
@@ -98,7 +99,7 @@ export default function Sell() {
 
   const reserveZat = parseCoins(reserve);
   const reserveProblem =
-    reserveZat === null ? "Enter an amount like 0.01." : reserveZat < MIN_BID ? `The reserve must be at least ${formatCoins(MIN_BID)} TAZ.` : null;
+    reserveZat === null ? "Enter an amount like 0.01." : reserveZat < MIN_BID ? `The reserve must be at least ${formatCoins(MIN_BID)} ${COIN}.` : null;
   const lotProblem =
     kind !== "digital"
       ? null
@@ -194,7 +195,7 @@ export default function Sell() {
               <h3>Bidding opens when your bond arrives</h3>
               <p className="small" style={{ margin: 0 }}>
                 Save your seller link below, then press <strong>Open the auction</strong>. The page shows where to send your bond of{" "}
-                <strong>{formatCoins(made.bond)} TAZ</strong>. The bidding time starts when it arrives, not now.
+                <strong>{formatCoins(made.bond)} {COIN}</strong>. The bidding time starts when it arrives, not now.
               </p>
             </div>
           )}
@@ -385,17 +386,17 @@ export default function Sell() {
               <span className="label-like">Your Bond</span>
               <BondFixed amount={minBond} of="the reserve" />
               <p className="hint">
-                {`A deposit you make before bidding opens. You get it back with your payment, or when the lot doesn't sell. You lose it to the winner if you don't deliver or lose a dispute. Each bidder puts down the same ${formatCoins(minBond)} TAZ on top of their bid, on the same terms. Anything you send above it comes straight back.`}
+                {`A deposit you make before bidding opens. You get it back with your payment, or when the lot doesn't sell. You lose it to the winner if you don't deliver or lose a dispute. Each bidder puts down the same ${formatCoins(minBond)} ${COIN} on top of their bid, on the same terms. Anything you send above it comes straight back.`}
               </p>
             </>
           )}
 
-          <label htmlFor="reserve">Reserve price (TAZ)</label>
+          <label htmlFor="reserve">Reserve price ({COIN})</label>
           <input id="reserve" inputMode="decimal" value={reserve} onChange={(e) => setReserve(e.target.value)} />
           <p className={reserveProblem ? "hint error" : "hint"} id="reserve-effect">
             {reserveProblem ??
               `The least you'll accept. It is public, and nobody can bid below it. There is no highest bid. Each bidder deposits their bid${
-                minBond > 0 ? ` plus a bond of ${formatCoins(minBond)} TAZ` : ""
+                minBond > 0 ? ` plus a bond of ${formatCoins(minBond)} ${COIN}` : ""
               }.`}
           </p>
 
@@ -424,8 +425,8 @@ export default function Sell() {
           </div>
 
           <label htmlFor="payout">Your shielded payout address</label>
-          <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
-          <p className="hint">A fresh unified address from your testnet wallet. Only this site sees it; it is never published.</p>
+          <input id="payout" className="mono" value={payout} onChange={(e) => setPayout(e.target.value)} placeholder={`${UA_PREFIX}…`} spellCheck={false} autoComplete="off" />
+          <p className="hint">A fresh unified address from your {WALLET_WORD} wallet. Only this site sees it; it is never published.</p>
 
           {error && <p className="error">{error}</p>}
           <div className="row" style={{ marginTop: 20 }}>

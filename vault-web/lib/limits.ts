@@ -57,6 +57,8 @@ export const LIMITS = {
   /** Order Flow: one unit of a batch sale is a code, a key or a short text, not a film. */
   maxUnitLotBytes: 64 * 1024 + 2048,
   disputeReasonMax: 600,
+  /** Mainnet copy only: the most a reserve, price or order may be while Dark Vault is new (default 0.02 ZEC). */
+  mainnetMaxZat: num("VAULT_MAINNET_MAX_ZAT", 2_000_000),
   envelopeMax: 8000,
   /**
    * Seats: how many bids an auction (or orders a sale) seats at once. A bid

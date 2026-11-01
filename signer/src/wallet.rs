@@ -70,7 +70,7 @@ use zcash_keys::keys::{UnifiedAddressRequest, UnifiedSpendingKey};
 use zcash_primitives::transaction::{fees::zip317, Transaction, TxId};
 use zcash_proofs::prover::LocalTxProver;
 use zcash_protocol::{
-    consensus::{BlockHeight, BranchId, TestNetwork},
+    consensus::{BlockHeight, BranchId, Network},
     memo::{Memo, MemoBytes},
     value::Zatoshis,
     ShieldedPool,
@@ -110,7 +110,22 @@ fn limits_from(setting: Option<&str>) -> (usize, usize) {
 /// Marks the short-lived locks a merge puts on the notes it leaves alone.
 const MERGE_LOCK_OWNER: LockOwner = LockOwner::new(*b"dark-vault/merge: notes left out");
 
-type Db = WalletDb<rusqlite::Connection, TestNetwork, SystemClock, OsRng>;
+type Db = WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>;
+
+/// The Zcash network this signer runs on: testnet unless ZCASH_NETWORK=main.
+/// Read once; every key, address and transaction below uses it.
+pub fn network() -> Network {
+    static NETWORK: std::sync::OnceLock<Network> = std::sync::OnceLock::new();
+    *NETWORK.get_or_init(|| match std::env::var("ZCASH_NETWORK").as_deref().map(str::trim) {
+        Ok("main") | Ok("mainnet") => Network::MainNetwork,
+        _ => Network::TestNetwork,
+    })
+}
+
+/// True on mainnet, where real money moves.
+pub fn is_mainnet() -> bool {
+    matches!(network(), Network::MainNetwork)
+}
 
 /// The concrete error type of the transfer APIs for a SQLite wallet
 /// (same instantiation ECC's zcash-devtool uses).
@@ -483,7 +498,7 @@ async fn connect(server: &str) -> anyhow::Result<CompactTxStreamerClient<Channel
 }
 
 fn open_db(config: &SyncConfig) -> anyhow::Result<Db> {
-    let mut db = WalletDb::for_path(&config.db_path, TestNetwork, SystemClock, os_rng())?;
+    let mut db = WalletDb::for_path(&config.db_path, network(), SystemClock, os_rng())?;
     init_wallet_db(&mut db, None).map_err(|e| anyhow!("init wallet db: {e:?}"))?;
     Ok(db)
 }
@@ -529,7 +544,7 @@ async fn sync_once(
         println!("wallet db created; scanning from height {birthday_height}");
     }
 
-    zcash_client_backend::sync::run(&mut client, &TestNetwork, cache, &mut db, BATCH_SIZE)
+    zcash_client_backend::sync::run(&mut client, &network(), cache, &mut db, BATCH_SIZE)
         .await
         .map_err(|e| anyhow!("{e}"))?;
 
@@ -563,7 +578,7 @@ async fn fetch_transaction(
         .then(|| BlockHeight::from_u32(raw.height as u32));
     let tx = Transaction::read(
         &raw.data[..],
-        BranchId::for_height(&TestNetwork, mined_height.unwrap_or(chain_tip)),
+        BranchId::for_height(&network(), mined_height.unwrap_or(chain_tip)),
     )?;
     Ok(Some((tx, mined_height)))
 }
@@ -593,7 +608,7 @@ async fn enhance(client: &mut CompactTxStreamerClient<Channel>, db: &mut Db) -> 
                 match fetch_transaction(client, chain_tip, txid).await? {
                     None => db.set_transaction_status(txid, TransactionStatus::TxidNotRecognized)?,
                     Some((tx, mined_height)) => {
-                        decrypt_and_store_transaction(&TestNetwork, db, &tx, mined_height)?
+                        decrypt_and_store_transaction(&network(), db, &tx, mined_height)?
                     }
                 }
             }
@@ -718,7 +733,7 @@ fn spendable_of(balance: &AccountBalance) -> u64 {
 
 fn spending_key(config: &SyncConfig, account_index: u32) -> anyhow::Result<UnifiedSpendingKey> {
     let index = AccountId::try_from(account_index).map_err(|_| anyhow!("bad account index"))?;
-    UnifiedSpendingKey::from_seed(&TestNetwork, &config.seed, index)
+    UnifiedSpendingKey::from_seed(&network(), &config.seed, index)
         .map_err(|e| anyhow!("deriving account key: {e:?}"))
 }
 
@@ -864,7 +879,7 @@ fn new_address(config: &SyncConfig, vault_id: &str) -> anyhow::Result<String> {
     let (address, _index) = db
         .get_next_available_address(account, UnifiedAddressRequest::ORCHARD)?
         .ok_or_else(|| anyhow!("could not derive a new address for vault {vault_id}"))?;
-    Ok(address.encode(&TestNetwork))
+    Ok(address.encode(&network()))
 }
 
 fn read_only(config: &SyncConfig) -> anyhow::Result<rusqlite::Connection> {
@@ -1022,13 +1037,17 @@ fn vault_info(config: &SyncConfig, status: &SyncStatus, vault_id: &str) -> anyho
 /// Shielded recipients with an Orchard receiver only. Anything else would
 /// either land in a public address or cross shielded pools.
 pub fn check_payout_address(address: &str) -> Result<(), String> {
-    match zcash_keys::address::Address::decode(&TestNetwork, address.trim()) {
+    match zcash_keys::address::Address::decode(&network(), address.trim()) {
         Some(zcash_keys::address::Address::Unified(ua)) if ua.has_orchard() => Ok(()),
         Some(zcash_keys::address::Address::Unified(_)) => {
             Err("this unified address has no Orchard receiver; please use one that does".into())
         }
-        Some(_) => Err("please use a shielded unified address (it starts with utest1)".into()),
-        None => Err("that is not a valid Zcash testnet address".into()),
+        Some(_) => Err(if is_mainnet() {
+            "please use a shielded unified address (it starts with u1)".into()
+        } else {
+            "please use a shielded unified address (it starts with utest1)".into()
+        }),
+        None => Err(if is_mainnet() { "that is not a valid Zcash mainnet address".into() } else { "that is not a valid Zcash testnet address".into() }),
     }
 }
 
@@ -1218,7 +1237,7 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment],
         let request = TransactionRequest::new(requested).map_err(|e| anyhow!("invalid request: {e:?}"))?;
         let attempt: Result<_, TransferError> = propose_transfer(
             &mut db,
-            &TestNetwork,
+            &network(),
             account,
             &GreedyInputSelector::new(),
             &change_strategy,
@@ -1265,7 +1284,7 @@ async fn settle(config: &SyncConfig, vault_id: &str, payments: &[SettlePayment],
     let prover = LocalTxProver::bundled();
     let txids = create_proposed_transactions(
         &mut db,
-        &TestNetwork,
+        &network(),
         &SystemClock,
         &mut os_rng(),
         &prover,
@@ -1402,10 +1421,10 @@ async fn merge_step(
     let (address, _) = db
         .get_next_available_address(account, UnifiedAddressRequest::ORCHARD)?
         .ok_or_else(|| anyhow!("could not derive an address to merge into"))?;
-    let recipient = ZcashAddress::from_str(&address.encode(&TestNetwork)).map_err(|_| anyhow!("bad merge address"))?;
+    let recipient = ZcashAddress::from_str(&address.encode(&network())).map_err(|_| anyhow!("bad merge address"))?;
     let planned = propose_send_max_transfer::<_, _, _, commitment_tree::Error>(
         db,
-        &TestNetwork,
+        &network(),
         account,
         &[pool],
         &StandardFeeRule::Zip317,
@@ -1439,7 +1458,7 @@ async fn merge_step(
     let prover = LocalTxProver::bundled();
     let txids = create_proposed_transactions(
         db,
-        &TestNetwork,
+        &network(),
         &SystemClock,
         &mut os_rng(),
         &prover,

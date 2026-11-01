@@ -5,6 +5,7 @@
 // in the page itself: without the key the site answers "not found".
 import { useCallback, useEffect, useState } from "react";
 import { formatCoins } from "vault-core";
+import { COIN } from "@/lib/network";
 
 interface Dispute {
   id: string;
@@ -237,10 +238,10 @@ function DisputeCard({ d, opKey, done }: { d: Dispute; opKey: string; done: () =
       <h2>{d.title}</h2>
       <dl className="kv op-kv">
         <dt>Price</dt>
-        <dd>{d.price !== null ? `${formatCoins(d.price)} TAZ` : "—"}</dd>
+        <dd>{d.price !== null ? `${formatCoins(d.price)} ${COIN}` : "—"}</dd>
         <dt>Bonds</dt>
         <dd>
-          Seller {formatCoins(d.seller_bond)} · Buyer {formatCoins(d.buyer_bond)} TAZ
+          Seller {formatCoins(d.seller_bond)} · Buyer {formatCoins(d.buyer_bond)} {COIN}
         </dd>
         <dt>Handed over</dt>
         <dd>{when(d.handed_over_at)}</dd>

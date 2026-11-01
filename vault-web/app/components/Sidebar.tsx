@@ -13,6 +13,7 @@ import type { IconType } from "react-icons";
 import { PiEyeBold, PiGavelBold, PiHandshakeBold, PiPathBold, PiScalesBold, PiShieldCheckBold, PiSquaresFourBold, PiStackBold, PiTagBold, PiWarningBold } from "react-icons/pi";
 import ChainStatus from "./ChainStatus";
 import WalletButton from "./WalletButton";
+import { NETWORK_NAME } from "@/lib/network";
 
 type Item = { href: string; label: string; icon: IconType; under?: string };
 
@@ -107,7 +108,7 @@ export default function Sidebar() {
         <div className="side-foot">
           <p className="peak sm">Privacy At Its Peak.</p>
           <ChainStatus />
-          <p className="side-credit">Zcash testnet. Built for the Zecathon by Diaguren Labs.</p>
+          <p className="side-credit">{NETWORK_NAME}. Built by Diaguren Labs.</p>
         </div>
       </aside>
     </>

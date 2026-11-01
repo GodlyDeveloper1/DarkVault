@@ -1,0 +1,10 @@
+# The mainnet copy of Dark Vault (Pay Anywhere, NEAR HACKATHON) at near.<domain>,
+# served by the testnet copy's Caddy. Copy into /opt/darkvault/deploy/sites/.
+near.{$DOMAIN} {
+	encode zstd gzip
+	reverse_proxy dv-near-web:3100
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000"
+	}
+}

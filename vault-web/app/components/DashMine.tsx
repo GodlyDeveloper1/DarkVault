@@ -14,6 +14,7 @@ import { loadWallet, OPEN_EVENT } from "@/lib/wallet";
 import { stateLabel } from "./AuctionTile";
 import MyDeals from "./MyDeals";
 import { saleLabel } from "./SaleTile";
+import { COIN } from "@/lib/network";
 
 /** The auctions this browser holds a seller's key for. */
 function listingIds(): string[] {
@@ -206,7 +207,7 @@ export default function DashMine({ open, total }: { open: number; total: number 
                           {row.auction?.title ?? "Auction"}
                           {row.auction?.batch && <i className="badge units-tag">Order</i>}
                         </span>
-                        <span className="mono wb-amount">{formatCoins(t.amount)} TAZ</span>
+                        <span className="mono wb-amount">{formatCoins(t.amount)} {COIN}</span>
                         <span className={`wb-status ${s.cls}`}>{s.text}</span>
                       </Link>
                     </li>
@@ -233,7 +234,7 @@ export default function DashMine({ open, total }: { open: number; total: number 
                         {auction?.title ?? "An auction this site no longer has"}
                         {auction?.batch && <i className="badge units-tag">{auction.batch.units} Units</i>}
                       </span>
-                      {auction && <span className="mono wb-amount">{auction.batch ? "From" : "Reserve"} {formatCoins(auction.reserve)} TAZ</span>}
+                      {auction && <span className="mono wb-amount">{auction.batch ? "From" : "Reserve"} {formatCoins(auction.reserve)} {COIN}</span>}
                       {auction && <span className="wb-status">{(auction.batch ? saleLabel(auction) : stateLabel(auction)).text}.</span>}
                     </Link>
                   </li>

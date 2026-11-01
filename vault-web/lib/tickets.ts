@@ -8,6 +8,7 @@
 
 import { bidToken, QUICKNET, roundTimeMs, sealedFor, type BeaconChain, type Receipt } from "vault-core";
 import { holdsInvite, rememberInvite } from "./invites";
+import { NETWORK_NAME } from "@/lib/network";
 
 export interface Ticket {
   auction_id: string;
@@ -169,16 +170,16 @@ export function allTickets(): Ticket[] {
   return out.sort((a, b) => b.placed_at - a.placed_at);
 }
 
-export const TICKET_HEADER = "DARK VAULT BID TICKET (Zcash testnet). Keep this private until bidding closes.";
+export const TICKET_HEADER = `DARK VAULT BID TICKET (${NETWORK_NAME}). Keep this private until bidding closes.`;
 
-export const DEAL_TICKET_HEADER = "DARK VAULT PAYMENT TICKET (Zcash testnet). Keep this private: it is the key to one payment in a private deal.";
+export const DEAL_TICKET_HEADER = `DARK VAULT PAYMENT TICKET (${NETWORK_NAME}). Keep this private: it is the key to one payment in a private deal.`;
 
 /** A ticket as a file. `deal`: the ticket is for a payment in a private deal, not a bid. */
 export function ticketFile(ticket: Ticket, title: string, deal = false): string {
   return [deal ? DEAL_TICKET_HEADER : TICKET_HEADER, `${deal ? "Deal" : "Auction"}: ${title}`, "", JSON.stringify(ticket, null, 1), ""].join("\n");
 }
 
-export const BACKUP_HEADER = "DARK VAULT TICKET BACKUP (Zcash testnet). Keep this private: it holds every bid this browser has sealed.";
+export const BACKUP_HEADER = `DARK VAULT TICKET BACKUP (${NETWORK_NAME}). Keep this private: it holds every bid this browser has sealed.`;
 
 export function backupFile(tickets: Ticket[]): string {
   return [BACKUP_HEADER, "", JSON.stringify(tickets, null, 1), ""].join("\n");

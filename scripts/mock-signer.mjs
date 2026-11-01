@@ -34,6 +34,8 @@ let height = 5_000_000;
 setInterval(() => (height += 1), BLOCK_MS).unref();
 
 let loseReplies = 0;
+// MOCK_NETWORK=main makes mainnet-shaped addresses (u1…), for trying the mainnet copy locally.
+const UA = process.env.MOCK_NETWORK === "main" ? "u1" : "utest1";
 const vaults = new Map(); // id -> { birthday, addresses: Set, deposits: [], settlements: [], merges: [] }
 // Like the real signer: a payout spends at most this many notes; a vault holding more is merged first, this many at a time.
 const MAX_PAYOUT_INPUTS = Number(process.env.MOCK_MAX_PAYOUT_INPUTS ?? 24);
@@ -92,7 +94,7 @@ function settle(v, payments, prepaid = 0) {
   if (!Number.isSafeInteger(prepaid) || prepaid < 0) return [400, "bad prepaid fee"];
   if (!Array.isArray(payments) || payments.length === 0) return [400, "a settlement needs at least one payment"];
   for (const [i, p] of payments.entries()) {
-    if (typeof p.to !== "string" || !p.to.startsWith("utest1")) return [400, `payment ${i}: please use a shielded unified address`];
+    if (typeof p.to !== "string" || !p.to.startsWith(UA)) return [400, `payment ${i}: please use a shielded unified address`];
     if (!Number.isSafeInteger(p.zatoshis) || p.zatoshis <= 0) return [400, `payment ${i} is for nothing`];
   }
   const unspent = spendableNotes(v);
@@ -185,7 +187,7 @@ http
 
     if (method === "POST" && path === "/addresses/check") {
       const a = String(body.address ?? "");
-      return json(200, a.startsWith("utest1") && a.length >= 24 ? { ok: true, reason: null } : { ok: false, reason: "please use a shielded unified address (it starts with utest1)" });
+      return json(200, a.startsWith(UA) && a.length >= 24 ? { ok: true, reason: null } : { ok: false, reason: `please use a shielded unified address (it starts with ${UA})` });
     }
 
     if (method === "POST" && path === "/vaults") {
@@ -216,7 +218,7 @@ http
       if (method === "GET" && !m[2]) return json(200, info(m[1], v));
       if (method === "POST" && m[2] === "/addresses") {
         if (v.settlements.length) return text(400, "this vault has been settled; it takes no new deposits");
-        const address = "utest1standin" + hex(24);
+        const address = UA + "standin" + hex(24);
         v.addresses.add(address);
         return json(200, { address });
       }

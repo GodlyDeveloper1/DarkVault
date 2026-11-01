@@ -4285,3 +4285,25 @@ select.g-voice-pick {
   border-left-color: var(--cyan);
   margin: 12px 0 0;
 }
+
+/* --- Pay Anywhere (mainnet copy, NEAR HACKATHON): pay a deposit with another coin --- */
+.anywhere {
+  margin-top: 14px;
+}
+.anywhere.card {
+  padding: 16px 18px;
+  border: 2px solid var(--lime);
+}
+.anywhere-title {
+  margin: 0 0 10px;
+}
+.anywhere select,
+.anywhere input {
+  width: 100%;
+}
+.anywhere .addr {
+  word-break: break-all;
+}
+.anywhere-privacy {
+  margin-top: 12px;
+}

@@ -1,0 +1,43 @@
+# The MAINNET copy of Dark Vault, with Pay Anywhere (NEAR Intents). Built for
+# NEAR HACKATHON, November 2026. Real money: amounts are capped (see
+# VAULT_MAINNET_MAX_ZAT) and practice auctions are off.
+#
+# On a server that already runs the testnet copy behind Caddy (deploy/setup.sh),
+# use a separate checkout of the near-hackathon branch:
+#
+#   git clone -b near-hackathon https://github.com/GodlyDeveloper1/DarkVault.git /opt/darkvault-near
+#   cd /opt/darkvault-near && cp .env.example .env    # set VAULT_OPERATOR_KEY
+#   docker compose -f docker-compose.yml -f deploy/mainnet.yml up -d --build
+#   cp deploy/near.caddy /opt/darkvault/deploy/sites/
+#   (then restart the testnet copy's Caddy)
+#
+# The mainnet signer gets its own volume (a new folder name than the testnet
+# copy's), and refuses to start on a testnet wallet folder.
+services:
+  signer:
+    environment:
+      ZCASH_NETWORK: main
+      LIGHTWALLETD_URL: ${LIGHTWALLETD_URL:-https://zec.rocks:443}
+      VAULT_MIN_CONFIRMATIONS: ${VAULT_MIN_CONFIRMATIONS:-3}
+
+  web:
+    build:
+      args:
+        NEXT_PUBLIC_ZCASH_NETWORK: main
+    environment:
+      # Practice auctions are testnet only: a house purse of real money is not offered.
+      HOUSE_SIGNER_URL: ""
+      VAULT_MAINNET_MAX_ZAT: ${VAULT_MAINNET_MAX_ZAT:-2000000}
+      TRUST_PROXY: "1"
+    ports: !override
+      - "127.0.0.1:${WEB_PORT:-3200}:3100"
+    networks:
+      proxy:
+        aliases:
+          - dv-near-web
+
+networks:
+  proxy:
+    external: true
+    # The testnet copy's "front" network, where its Caddy lives.
+    name: ${PROXY_NETWORK:-darkvault_front}

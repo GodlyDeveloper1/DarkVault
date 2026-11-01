@@ -15,6 +15,55 @@ after the lot has been handed over, and the site can't read the lot or the winne
 Built solo by [@Diaguren_Labs](https://x.com/Diaguren_Labs) for the
 [Zecathon](https://thezecathon.com/) (Private Markets track). **Testnet only. In development.**
 
+## NEAR HACKATHON: Pay Anywhere
+
+Built at [NEAR HACKATHON](https://nearhackathon.com) (November 2026) on top of the Zecathon
+project above. **Only this part is the hackathon entry.** Everything before the tag
+`pre-near-hackathon` is baseline; the work is on the `near-hackathon` branch:
+[the full diff](https://github.com/GodlyDeveloper1/DarkVault/compare/pre-near-hackathon...near-hackathon).
+Tracks: Unstoppable DeFi, Privacy & Private AI, Real-World Money.
+
+**The problem.** Private payments on Zcash need shielded ZEC, and most buyers don't hold any.
+They hold USDC on Base, ETH, SOL, BTC or NEAR.
+
+**What it does.** On the mainnet copy, every Dark Vault deposit screen (an auction bid, an
+Order Flow order, a deal payment, a seller's bond) has **Pay With Another Coin**. Pick a coin,
+and the browser asks NEAR Intents (the 1Click API) for a quote that delivers **exactly** the
+shielded ZEC that deposit needs, to that deposit's one-time address. Pay the coin to the
+address NEAR Intents gives you; solvers swap it and deliver the ZEC; Dark Vault sees an ordinary
+shielded deposit arrive, and the bid, order or deal goes on as usual.
+
+**How NEAR fits in.** NEAR Intents is the cross-chain settlement: any supported coin in,
+shielded ZEC out, with no bridge to run and no custody on our side. If the swap can't be done
+in time, NEAR Intents refunds the payer on the paying chain.
+
+**Privacy, said plainly.**
+- Only the payer's browser talks to NEAR Intents. Dark Vault's server never learns which coin,
+  chain or wallet paid (its Content-Security-Policy allows exactly one extra origin, on the
+  mainnet build only: `https://1click.chaindefuser.com`).
+- The payment is public on its own chain, and NEAR Intents sees it and the deposit address.
+  From the Zcash side on, it is shielded like any other deposit.
+
+**Try it.**
+- Live (mainnet, real money, small amounts): https://near.zecdarkvault.xyz
+- Locally, without spending anything: start the stand-in signer with `MOCK_NETWORK=main`, build
+  the web app with `NEXT_PUBLIC_ZCASH_NETWORK=main`, open a deal and press **Pay With Another
+  Coin**. Quotes come from the real NEAR Intents API.
+
+**What changed for it** (all in the diff above):
+- `signer/`: `ZCASH_NETWORK=main` runs the signer on mainnet; a marker file stops a mainnet
+  signer from ever opening a testnet wallet folder.
+- `vault-web/lib/network.ts`: one switch for the network (coin name, address prefix, texts).
+- `vault-web/lib/oneclick.ts` and `vault-web/app/components/PayAnywhere.tsx`: the NEAR Intents
+  client and the panel.
+- A mainnet cap on prices while Dark Vault is new (`VAULT_MAINNET_MAX_ZAT`, default 0.02 ZEC).
+- `deploy/mainnet.yml`: the mainnet copy next to the testnet one.
+
+**The other entry** from the same builder: **Shielded Quest: Prizes Anywhere**
+(https://github.com/GodlyDeveloper1/ShieldedQuest, `near-hackathon` branch), treasure hunts
+whose shielded ZEC prizes can be funded and claimed in other coins through NEAR Intents.
+The two projects are independent.
+
 ## How an auction works
 
 1. **List.** A seller describes a lot, sets a reserve and an end time, and gives a shielded

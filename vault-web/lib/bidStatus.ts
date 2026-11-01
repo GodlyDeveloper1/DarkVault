@@ -7,6 +7,7 @@ import { decryptListing, formatCoins } from "vault-core";
 import { inviteFor, inviteHeaders } from "./invites";
 import { tokenOf, type Ticket } from "./tickets";
 import type { BidView, PublicAuction } from "./views";
+import { COIN } from "@/lib/network";
 
 export interface Row {
   ticket: Ticket;
@@ -114,9 +115,9 @@ export function statusOf(row: Row): { text: string; cls: string } {
     if (stage === "awaiting-confirmation") return { text: auction.batch ? "Won. Check your unit and confirm." : "Won. Confirm you have the lot.", cls: "amber" };
     if (stage === "disputed") return { text: "Won. Dispute open.", cls: "amber" };
     // In a batch sale each winner pays their own order; the public price there is the lowest winner's.
-    return { text: `Won. You pay ${formatCoins(auction.batch ? (view.unit?.price ?? ticket.amount) : (auction.outcome?.price ?? ticket.amount))} TAZ.`, cls: "lime" };
+    return { text: `Won. You pay ${formatCoins(auction.batch ? (view.unit?.price ?? ticket.amount) : (auction.outcome?.price ?? ticket.amount))} ${COIN}.`, cls: "lime" };
   }
   if (view?.standing === "no-deposit") return { text: "Did not count: no deposit.", cls: "" };
-  if (refund) return { text: refund.status === "mined" ? `Refunded ${formatCoins(refund.paid)} TAZ.` : "Refund on its way.", cls: refund.status === "mined" ? "" : "amber" };
+  if (refund) return { text: refund.status === "mined" ? `Refunded ${formatCoins(refund.paid)} ${COIN}.` : "Refund on its way.", cls: refund.status === "mined" ? "" : "amber" };
   return { text: funded ? "Refund is being prepared." : "Closed.", cls: funded ? "amber" : "" };
 }

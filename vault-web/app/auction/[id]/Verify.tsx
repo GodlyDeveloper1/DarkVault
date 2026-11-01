@@ -48,6 +48,7 @@ import {
 import { inviteHeaders } from "@/lib/invites";
 import type { Ticket } from "@/lib/tickets";
 import type { PublicAuction } from "@/lib/views";
+import { COIN } from "@/lib/network";
 
 interface Check {
   /**
@@ -113,7 +114,7 @@ async function check(auction: PublicAuction, tickets: Ticket[], onProgress: (don
   const others = verdict.counted - (statement.sold ? 1 : 0);
   if (verdict.ok) {
     if (statement.sold) {
-      pass(`Bid #${statement.winner! + 1} opens to exactly ${formatCoins(statement.price!)} TAZ: the winner pays what they sealed.`);
+      pass(`Bid #${statement.winner! + 1} opens to exactly ${formatCoins(statement.price!)} ${COIN}: the winner pays what they sealed.`);
       if (others > 0) pass(`${others === 1 ? "The other bid that counted is" : `Each of the ${others} other bids that counted is`} proven to be lower. ${others === 1 ? "Its amount is" : "Their amounts are"} not shown.`);
       else note("No other bid counted, so there was nothing to compare the winner with.");
     } else if (verdict.counted > 0) pass(`${verdict.counted === 1 ? "The bid that counted is" : `Each of the ${verdict.counted} bids that counted is`} proven to be below the reserve, so the lot rightly did not sell.`);
@@ -156,7 +157,7 @@ async function check(auction: PublicAuction, tickets: Ticket[], onProgress: (don
       continue; // not a ticket for this kind of auction
     }
     const at = statement.bids.findIndex((b) => b.commitment === commitment);
-    const mine = `Your bid of ${formatCoins(t.amount)} TAZ`;
+    const mine = `Your bid of ${formatCoins(t.amount)} ${COIN}`;
     if (at < 0) {
       fail(`${mine} is missing from the board. ${t.receipt ? "Keep your ticket: its receipt is the site's own signature that it accepted the bid." : ""}`);
       continue;
@@ -187,7 +188,7 @@ async function check(auction: PublicAuction, tickets: Ticket[], onProgress: (don
       else pass(`Bid #${at + 1} was counted.`);
     } else
       warn(
-        `Bid #${at + 1} did not count: the site says ${status === "no-deposit" ? "no deposit arrived before the close" : auction.deposit_required != null ? "its deposit was smaller than every bid must deposit" : "its deposit did not cover the bid and the bond"}. Deposits are shielded, so no proof can show this either way. If you sent ${formatCoins(auction.deposit_required ?? t.amount + (auction.delivery?.buyer_bond ?? 0))} TAZ or more in time, keep your wallet's record of the payment and your ticket.`,
+        `Bid #${at + 1} did not count: the site says ${status === "no-deposit" ? "no deposit arrived before the close" : auction.deposit_required != null ? "its deposit was smaller than every bid must deposit" : "its deposit did not cover the bid and the bond"}. Deposits are shielded, so no proof can show this either way. If you sent ${formatCoins(auction.deposit_required ?? t.amount + (auction.delivery?.buyer_bond ?? 0))} ${COIN} or more in time, keep your wallet's record of the payment and your ticket.`,
       );
   }
   return out;
@@ -235,7 +236,7 @@ async function checkBatch(auction: PublicAuction, tickets: Ticket[], { statement
   const lost = verdict.counted - won;
   if (verdict.ok) {
     if (won > 0) {
-      pass(`Order #${statement.marginal! + 1} opens to exactly ${formatCoins(statement.price!)} TAZ: it is the lowest order that won a unit.`);
+      pass(`Order #${statement.marginal! + 1} opens to exactly ${formatCoins(statement.price!)} ${COIN}: it is the lowest order that won a unit.`);
       if (won > 1) pass(`${won - 1 === 1 ? "The other winning order is" : `Each of the ${won - 1} other winning orders is`} proven to have offered at least that. What ${won - 1 === 1 ? "it" : "each"} offered, and pays, is not shown.`);
       if (lost > 0)
         pass(
@@ -285,7 +286,7 @@ async function checkBatch(auction: PublicAuction, tickets: Ticket[], { statement
       continue; // not a ticket for this kind of sale
     }
     const at = statement.bids.findIndex((b) => b.commitment === commitment);
-    const mine = `Your order of ${formatCoins(t.amount)} TAZ`;
+    const mine = `Your order of ${formatCoins(t.amount)} ${COIN}`;
     if (at < 0) {
       fail(`${mine} is missing from the board. ${t.receipt ? "Keep your ticket: its receipt is the site's own signature that it accepted the order." : ""}`);
       continue;
@@ -317,10 +318,10 @@ async function checkBatch(auction: PublicAuction, tickets: Ticket[], { statement
         return side === "at-least" ? t.amount >= bound : t.amount <= bound;
       })();
       if (!fits) fail(isWinner ? `Your order #${at + 1} is said to have won, but it offered less than the published result needs.` : `Your order #${at + 1} offered more than the published result allows for an order that did not win.`);
-      else pass(isWinner ? `Order #${at + 1} was counted, and won a unit at ${formatCoins(t.amount)} TAZ, what it offered.` : `Order #${at + 1} was counted. It did not win a unit.`);
+      else pass(isWinner ? `Order #${at + 1} was counted, and won a unit at ${formatCoins(t.amount)} ${COIN}, what it offered.` : `Order #${at + 1} was counted. It did not win a unit.`);
     } else
       warn(
-        `Order #${at + 1} did not count: the site says ${status === "no-deposit" ? "no deposit arrived before the close" : "its deposit did not cover the order and the bond"}. Deposits are shielded, so no proof can show this either way. If you sent ${formatCoins(t.amount + bond)} TAZ or more in time, keep your wallet's record of the payment and your ticket.`,
+        `Order #${at + 1} did not count: the site says ${status === "no-deposit" ? "no deposit arrived before the close" : "its deposit did not cover the order and the bond"}. Deposits are shielded, so no proof can show this either way. If you sent ${formatCoins(t.amount + bond)} ${COIN} or more in time, keep your wallet's record of the payment and your ticket.`,
       );
   }
   return out;

@@ -13,6 +13,7 @@ import NavMenu from "./NavMenu";
 import Sidebar from "./Sidebar";
 import VaultGuide from "./VaultGuide";
 import WalletButton from "./WalletButton";
+import { NETWORK_NAME } from "@/lib/network";
 
 export default function Frame({ children }: { children: React.ReactNode }) {
   const path = usePathname();
@@ -48,7 +49,7 @@ export default function Frame({ children }: { children: React.ReactNode }) {
         {children}
         <footer className="foot">
           <div className="shell foot-in">
-            <span>Dark Vault runs on the Zcash testnet. Built for the Zecathon by Diaguren Labs.</span>
+            <span>Dark Vault runs on the {NETWORK_NAME}. Built by Diaguren Labs.</span>
             <ChainStatus />
           </div>
         </footer>

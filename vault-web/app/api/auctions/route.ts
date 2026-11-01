@@ -13,6 +13,7 @@ import { isSiteAddress, OWN_ADDRESS } from "@/lib/siteAddresses";
 import { listAuctions } from "@/lib/store";
 import type { Delivery } from "@/lib/types";
 import { infosFor, listed, listedSales, publicView } from "@/lib/views";
+import { MAINNET } from "@/lib/network";
 
 export const dynamic = "force-dynamic";
 
@@ -132,6 +133,8 @@ export async function POST(req: Request) {
   if (ceiling !== undefined && (typeof ceiling !== "number" || !Number.isSafeInteger(ceiling) || ceiling < reserve || ceiling > reserve * LIMITS.maxCeilingMultiple || ceiling > LIMITS.maxAmount))
     return bad(`the highest bid allowed must be between the reserve and ${LIMITS.maxCeilingMultiple} times the reserve`);
   if (reserve > LIMITS.maxAmount) return bad(`the ${deal ? "price" : "reserve"} is too high`);
+  if (MAINNET && reserve > LIMITS.mainnetMaxZat)
+    return bad(`on mainnet, while Dark Vault is new, the ${deal ? "price" : batch ? "lowest price" : "reserve"} can be at most ${LIMITS.mainnetMaxZat} zatoshis`);
   if (batch && reserve > BATCH_MAX_ORDER) return bad("the lowest price is too high");
   if (deal && (typeof durationSec !== "number" || !Number.isInteger(durationSec) || durationSec < LIMITS.minDurationSec || durationSec > LIMITS.maxDealOfferSec))
     return bad(`a deal's offer stands between ${Math.ceil(LIMITS.minDurationSec / 60)} minutes and ${LIMITS.maxDealOfferSec / 86400} days`);

@@ -48,6 +48,7 @@ import Countdown from "@/app/components/Countdown";
 import PhotoGallery from "@/app/components/PhotoGallery";
 import Qr from "@/app/components/Qr";
 import PayLink from "@/app/components/PayLink";
+import PayAnywhere from "@/app/components/PayAnywhere";
 import { saleLabel, unitsWord } from "@/app/components/SaleTile";
 import { SeatsFull, seatsLeft, SeatsStat } from "@/app/components/AuctionTile";
 import { SellerDelivery, WinnerDelivery } from "@/app/auction/[id]/Delivery";
@@ -56,6 +57,7 @@ import { sellerKeyFor } from "@/lib/sellerKey";
 import { loadTickets, mayOpenByHand, parseTicketFile, saveTicket, ticketFile, tokenOf, WALLET_EVENT, type Ticket } from "@/lib/tickets";
 import { loadWallet, OPEN_EVENT, paymentRequest } from "@/lib/wallet";
 import type { BidView, PublicAuction, SellerView } from "@/lib/views";
+import { COIN, MAINNET, UA_PREFIX, WALLET_WORD } from "@/lib/network";
 
 const STANDING: Record<string, string> = {
   won: "You won a unit.",
@@ -282,10 +284,10 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
               <span className="muted small">Status</span>
               <div className="big">Not Open Yet</div>
               <span className="muted small">
-                Orders open when the seller&apos;s bond of {formatCoins(sellerBond)} TAZ has arrived. Check back in a few minutes.
+                Orders open when the seller&apos;s bond of {formatCoins(sellerBond)} {COIN} has arrived. Check back in a few minutes.
               </span>
               <p className="clock-min">
-                Lowest price per unit: <strong>{formatCoins(auction.reserve)} TAZ</strong>
+                Lowest price per unit: <strong>{formatCoins(auction.reserve)} {COIN}</strong>
               </p>
             </>
           )}
@@ -297,9 +299,9 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
               </div>
               <span className="muted small">Orders are locked in time until then. Nobody can open one early, this site included.</span>
               <p className="clock-min" id="clock-min">
-                Lowest price per unit: <strong>{formatCoins(auction.reserve)} TAZ</strong>
+                Lowest price per unit: <strong>{formatCoins(auction.reserve)} {COIN}</strong>
                 <br />
-                You deposit: <strong>your order{buyerBond > 0 ? ` + ${formatCoins(buyerBond)} TAZ bond` : ""}</strong>
+                You deposit: <strong>your order{buyerBond > 0 ? ` + ${formatCoins(buyerBond)} ${COIN} bond` : ""}</strong>
               </p>
             </>
           )}
@@ -320,7 +322,7 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
             <>
               <span className="muted small">{auction.outcome?.sold ? "Lowest winning order" : "Result"}</span>
               <div className="big" id="result-price">
-                {cancelled ? "Never Opened" : auction.outcome?.sold ? <span className="price">{formatCoins(auction.outcome.price!)} TAZ</span> : "Nothing Sold"}
+                {cancelled ? "Never Opened" : auction.outcome?.sold ? <span className="price">{formatCoins(auction.outcome.price!)} {COIN}</span> : "Nothing Sold"}
               </div>
               <span className="muted small" id="result-line">
                 {cancelled
@@ -362,7 +364,7 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
             <SeatsStat auction={auction} />
             <div>
               <b>{formatCoins(auction.reserve)}</b>
-              <span>lowest price (TAZ)</span>
+              <span>lowest price ({COIN})</span>
             </div>
           </div>
         </div>
@@ -390,17 +392,17 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
             <div>
               <span className="muted small">The seller&apos;s bond</span>
               <b className="mono" id="stake-seller">
-                {formatCoins(sellerBond)} TAZ
+                {formatCoins(sellerBond)} {COIN}
               </b>
               <p className="small muted">
-                Paid in before orders opened: {formatCoins(batch.seller_bond_per_unit)} TAZ for each of the {batch.units} units. For every unit they
+                Paid in before orders opened: {formatCoins(batch.seller_bond_per_unit)} {COIN} for each of the {batch.units} units. For every unit they
                 don&apos;t hand over in time, or lose a dispute over, the seller loses that unit&apos;s share to its buyer.
               </p>
             </div>
             <div>
               <span className="muted small">Every order&apos;s bond</span>
               <b className="mono" id="stake-buyer">
-                {formatCoins(buyerBond)} TAZ
+                {formatCoins(buyerBond)} {COIN}
               </b>
               <p className="small muted">
                 Part of every deposit. Everyone who doesn&apos;t win a unit gets it straight back. A buyer loses it to the seller only if they open
@@ -432,7 +434,7 @@ export default function SaleRoom({ initial, serverNow }: { initial: PublicAuctio
               {auction.state === "funding" && seller.bond && <BondFunding bond={seller.bond} units={batch.units} />}
               {seller.bond && auction.state !== "funding" && !decided && (
                 <p className="small muted" id="bond-status" style={{ marginBottom: 8 }}>
-                  Your bond of {formatCoins(seller.bond.required)} TAZ is held. After the close, the share of every unit that did not sell comes
+                  Your bond of {formatCoins(seller.bond.required)} {COIN} is held. After the close, the share of every unit that did not sell comes
                   straight back, and each sold unit&apos;s share comes back with its payment.
                 </p>
               )}
@@ -553,7 +555,7 @@ function SellerUnits({ auction, seller, manageKey, token, refresh }: { auction: 
       {units.length === 0 ? (
         <p className="small" style={{ margin: 0 }} id="seller-nothing-sold">
           No unit sold, so nothing was paid to you.{" "}
-          {seller.proceeds ? `Your bond came back: ${formatCoins(seller.proceeds.paid)} TAZ after the network fee.` : seller.bond ? "Your bond is on its way back to you." : ""}
+          {seller.proceeds ? `Your bond came back: ${formatCoins(seller.proceeds.paid)} ${COIN} after the network fee.` : seller.bond ? "Your bond is on its way back to you." : ""}
         </p>
       ) : (
         <p className="small" id="seller-summary">
@@ -566,7 +568,7 @@ function SellerUnits({ auction, seller, manageKey, token, refresh }: { auction: 
             <>
               {" "}
               {seller.bond_back
-                ? `Your bond for the ${unsold} unsold ${unsold === 1 ? "unit" : "units"} came back: ${formatCoins(seller.bond_back.paid)} TAZ (${seller.bond_back.status}).`
+                ? `Your bond for the ${unsold} unsold ${unsold === 1 ? "unit" : "units"} came back: ${formatCoins(seller.bond_back.paid)} ${COIN} (${seller.bond_back.status}).`
                 : `Your bond for the ${unsold} unsold ${unsold === 1 ? "unit" : "units"} is on its way back.`}
             </>
           )}
@@ -576,7 +578,7 @@ function SellerUnits({ auction, seller, manageKey, token, refresh }: { auction: 
         <div className="unit-row" key={u.unit} data-unit-row={u.unit}>
           <div className="row spread">
             <strong>Unit {u.unit}</strong>
-            <span className="mono unit-price">{formatCoins(u.price)} TAZ</span>
+            <span className="mono unit-price">{formatCoins(u.price)} {COIN}</span>
           </div>
           {!u.delivery && (
             <p className="small muted" style={{ margin: "6px 0 0" }}>
@@ -586,7 +588,7 @@ function SellerUnits({ auction, seller, manageKey, token, refresh }: { auction: 
           {u.delivery && manageKey && token && <SellerDelivery auction={auction} seller={seller} manageKey={manageKey} token={token} refresh={refresh} unit={{ number: u.unit, delivery: u.delivery }} />}
           {u.proceeds && (
             <p className="small unit-paid" style={{ margin: "6px 0 0" }}>
-              Sent to you: <strong>{formatCoins(u.proceeds.paid)} TAZ</strong> <span className="muted">({u.proceeds.status})</span>{" "}
+              Sent to you: <strong>{formatCoins(u.proceeds.paid)} {COIN}</strong> <span className="muted">({u.proceeds.status})</span>{" "}
               <Copy text={u.proceeds.txid} label="Copy Transaction" />
             </p>
           )}
@@ -594,7 +596,7 @@ function SellerUnits({ auction, seller, manageKey, token, refresh }: { auction: 
       ))}
       {received > 0 && units.length > 0 && (
         <p className="small" id="seller-total" style={{ margin: "12px 0 0" }}>
-          Sent to {seller.payout_address} so far, after network fees: <strong>{formatCoins(received)} TAZ</strong>.
+          Sent to {seller.payout_address} so far, after network fees: <strong>{formatCoins(received)} {COIN}</strong>.
         </p>
       )}
     </div>
@@ -637,7 +639,7 @@ function BondFunding({ bond, units }: { bond: NonNullable<SellerView["bond"]>; u
   return (
     <div id="bond-funding" style={{ marginBottom: 12 }}>
       <p className="small" style={{ marginBottom: 10 }}>
-        <strong>Fund your bond to open the sale.</strong> Send <strong>{formatCoins(bond.required)} TAZ</strong> from a shielded balance to the address
+        <strong>Fund your bond to open the sale.</strong> Send <strong>{formatCoins(bond.required)} {COIN}</strong> from a shielded balance to the address
         below, with no memo. That is one bond for each of the {units} units. Orders open when it is in a block. The share of every unit that
         doesn&apos;t sell comes straight back; each sold unit&apos;s share comes back with its payment. You lose a unit&apos;s share to its buyer
         if you don&apos;t hand that unit over or lose a dispute about it.
@@ -656,11 +658,12 @@ function BondFunding({ bond, units }: { bond: NonNullable<SellerView["bond"]>; u
             {received >= bond.required
               ? "Received. Opening the sale…"
               : received > 0
-                ? `${formatCoins(received)} TAZ has arrived; ${formatCoins(bond.required - received)} TAZ more is needed.`
+                ? `${formatCoins(received)} ${COIN} has arrived; ${formatCoins(bond.required - received)} ${COIN} more is needed.`
                 : "Nothing has arrived yet."}{" "}
             If the bond is not here by {new Date(bond.wait_until).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}, the
             sale is cancelled.
           </p>
+          {MAINNET && received < bond.required && <PayAnywhere to={bond.address} zat={bond.required - received} />}
         </div>
       </div>
     </div>
@@ -697,9 +700,9 @@ function OrderForm({ auction, onPlaced, hasOrders }: { auction: PublicAuction; o
       : zat === null
         ? "Enter an amount like 0.05."
         : zat < Math.max(MIN_BID, auction.reserve)
-          ? `An order below the lowest price (${formatCoins(auction.reserve)} TAZ) can't win a unit.`
+          ? `An order below the lowest price (${formatCoins(auction.reserve)} ${COIN}) can't win a unit.`
           : zat > BATCH_MAX_ORDER
-            ? `One order can be at most ${formatCoins(BATCH_MAX_ORDER)} TAZ.`
+            ? `One order can be at most ${formatCoins(BATCH_MAX_ORDER)} ${COIN}.`
             : null;
   const exact = zat !== null && !problem ? zat + bond : null;
   const hidden = zat !== null && !problem ? hidingDeposit(auction.reserve, zat) + bond : null;
@@ -784,12 +787,12 @@ function OrderForm({ auction, onPlaced, hasOrders }: { auction: PublicAuction; o
         One sealed number, for one unit. If it is among the {auction.batch!.units} highest, you win a unit and pay exactly that. Nobody can open
         it until the sale has closed, and nothing anyone else offers can change what you pay. Want two units? Place two orders.
       </p>
-      <label htmlFor="amount">Your Order, For One Unit (TAZ)</label>
+      <label htmlFor="amount">Your Order, For One Unit ({COIN})</label>
       <input id="amount" inputMode="decimal" autoComplete="off" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={formatCoins(auction.reserve)} />
       <p className={problem ? "hint error" : "hint"}>
         {problem ??
-          `At least ${formatCoins(auction.reserve)} TAZ, the lowest price. ${
-            bond > 0 ? `You deposit your order plus a bond of ${formatCoins(bond)} TAZ. The bond comes back unless you open a dispute and lose it.` : "You deposit your order."
+          `At least ${formatCoins(auction.reserve)} ${COIN}, the lowest price. ${
+            bond > 0 ? `You deposit your order plus a bond of ${formatCoins(bond)} ${COIN}. The bond comes back unless you open a dispute and lose it.` : "You deposit your order."
           }`}
       </p>
 
@@ -802,27 +805,27 @@ function OrderForm({ auction, onPlaced, hasOrders }: { auction: PublicAuction; o
             "This site sees deposits arrive, so it can work an order out from its deposit. Tick this to send a larger, round amount instead. What you don't owe comes back."
           ) : hide ? (
             <>
-              You will deposit <strong>{formatCoins(hidden)} TAZ</strong>, a round amount above your order. The site then knows only that your order
-              is no more than {formatCoins(hidden - bond)} TAZ. What you don&apos;t owe comes back when the sale settles.
+              You will deposit <strong>{formatCoins(hidden)} {COIN}</strong>, a round amount above your order. The site then knows only that your order
+              is no more than {formatCoins(hidden - bond)} {COIN}. What you don&apos;t owe comes back when the sale settles.
             </>
           ) : (
             <>
-              You will deposit <strong>{formatCoins(exact)} TAZ</strong>
+              You will deposit <strong>{formatCoins(exact)} {COIN}</strong>
               {bond > 0 ? ", your order plus the bond" : ", your order"}. The chain shows nothing, but this site sees deposits arrive and can work your
-              order out from yours. Tick the box to send {formatCoins(hidden)} TAZ instead and keep it from the site too.
+              order out from yours. Tick the box to send {formatCoins(hidden)} {COIN} instead and keep it from the site too.
             </>
           )}
         </p>
       </div>
 
       <label htmlFor="refund">Your Shielded Refund Address</label>
-      <input id="refund" className="mono" value={refund} onChange={(e) => setRefund(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
+      <input id="refund" className="mono" value={refund} onChange={(e) => setRefund(e.target.value)} placeholder={`${UA_PREFIX}…`} spellCheck={false} autoComplete="off" />
       <p className="hint">
         {saved && refund === saved ? (
           <>From your connected wallet. Your deposit, or what is left of it, comes back here. Paste a fresh address instead if you prefer.</>
         ) : (
           <>
-            A fresh unified address from your testnet wallet. Your deposit, or what is left of it, comes back here.{" "}
+            A fresh unified address from your {WALLET_WORD} wallet. Your deposit, or what is left of it, comes back here.{" "}
             <button type="button" className="link small" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
               Connect A Wallet
             </button>{" "}
@@ -867,7 +870,7 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
       <div className="card bad" data-bid={ticket.bid_id}>
         <h3>This Ticket Is Not Known Here</h3>
         <p className="small bid-unknown" style={{ margin: 0 }}>
-          This browser holds a ticket for an order of {formatCoins(ticket.amount)} TAZ in this sale, but the site has no order that matches it.{" "}
+          This browser holds a ticket for an order of {formatCoins(ticket.amount)} {COIN} in this sale, but the site has no order that matches it.{" "}
           <strong>Don&apos;t send anything to an address from it.</strong> If it came from a file someone sent you, it is not yours.
         </p>
       </div>
@@ -877,7 +880,7 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
     <div className={`card ${view?.standing === "won" ? "accent" : ""}`} data-bid={ticket.bid_id}>
       <div className="row spread">
         <h3 style={{ margin: 0 }}>Your Sealed Order</h3>
-        <strong className="mono">{formatCoins(ticket.amount)} TAZ</strong>
+        <strong className="mono">{formatCoins(ticket.amount)} {COIN}</strong>
       </div>
 
       {auction.state === "open" && !funded && !payTo && (
@@ -888,16 +891,16 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
       {auction.state === "open" && !funded && payTo && (
         <>
           <p className="small" style={{ marginTop: 12 }} id="fund-it">
-            <strong>Now fund it.</strong> Send <strong>{formatCoins(send)} TAZ</strong> from a shielded balance to the address below, with no memo. It
+            <strong>Now fund it.</strong> Send <strong>{formatCoins(send)} {COIN}</strong> from a shielded balance to the address below, with no memo. It
             was made for this order alone.{" "}
             {hiding ? (
               <>
                 That is a round amount above your order, as you chose, so this site can&apos;t work your order out from it. Your order needs{" "}
-                {formatCoins(needed)} TAZ{bond > 0 && <> (the order plus the {formatCoins(bond)} TAZ bond)</>}; the rest comes back when the sale settles.
+                {formatCoins(needed)} {COIN}{bond > 0 && <> (the order plus the {formatCoins(bond)} {COIN} bond)</>}; the rest comes back when the sale settles.
               </>
             ) : (
               <>
-                That is your order{bond > 0 && <> plus the {formatCoins(bond)} TAZ bond</>}. A smaller deposit would not count. A larger one is fine:
+                That is your order{bond > 0 && <> plus the {formatCoins(bond)} {COIN} bond</>}. A smaller deposit would not count. A larger one is fine:
                 what you don&apos;t owe comes back.
               </>
             )}
@@ -918,9 +921,10 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
                 <Copy text={uri} label="Copy Payment Request" />
               </div>
               <p className="hint">
-                The button opens your Zcash wallet app with this address and {formatCoins(send)} TAZ filled in. No wallet app on this device? Scan
+                The button opens your Zcash wallet app with this address and {formatCoins(send)} {COIN} filled in. No wallet app on this device? Scan
                 the code with your phone.
               </p>
+              {MAINNET && <PayAnywhere to={payTo} zat={send} />}
             </div>
           </div>
         </>
@@ -930,18 +934,18 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
         <div className="deposit-math" id="deposit-math">
           {hiding ? (
             <>
-              <strong>The deposit is not the price.</strong> You deposit {formatCoins(send)} TAZ, more than your order, so this site can&apos;t tell what
+              <strong>The deposit is not the price.</strong> You deposit {formatCoins(send)} {COIN}, more than your order, so this site can&apos;t tell what
               you offered.
             </>
           ) : (
             <>
-              <strong>What happens to your {formatCoins(send)} TAZ.</strong> It is your order of {formatCoins(ticket.amount)} TAZ and the {formatCoins(bond)} TAZ bond.
+              <strong>What happens to your {formatCoins(send)} {COIN}.</strong> It is your order of {formatCoins(ticket.amount)} {COIN} and the {formatCoins(bond)} {COIN} bond.
             </>
           )}
           <ul>
             <li>
-              If you win a unit, you pay your order, <strong>{formatCoins(ticket.amount)} TAZ</strong>, and{" "}
-              <strong>{formatCoins(send - ticket.amount)} TAZ</strong> comes back
+              If you win a unit, you pay your order, <strong>{formatCoins(ticket.amount)} {COIN}</strong>, and{" "}
+              <strong>{formatCoins(send - ticket.amount)} {COIN}</strong> comes back
               {bond > 0 && send - ticket.amount > bond
                 ? ` (${formatCoins(send - ticket.amount - bond)} at the close, the ${formatCoins(bond)} bond after the handover)`
                 : bond > 0
@@ -950,22 +954,22 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
               .
             </li>
             <li>
-              If you don&apos;t, all <strong>{formatCoins(send)} TAZ</strong> comes back.
+              If you don&apos;t, all <strong>{formatCoins(send)} {COIN}</strong> comes back.
             </li>
           </ul>
-          <span className="muted">A small network fee (about 0.00008 TAZ) comes off what is returned.</span>
+          <span className="muted">A small network fee (about 0.00008 {COIN}) comes off what is returned.</span>
         </div>
       )}
 
       <dl className="kv" style={{ marginTop: 14 }}>
         <dt>Deposit</dt>
         <dd className="deposit-status">
-          {!deposit ? "checking…" : !funded ? "not seen yet" : `${formatCoins(deposit.total)} TAZ · ${Math.min(deposit.confirmations, deposit.needed)} of ${deposit.needed} confirmations`}
+          {!deposit ? "checking…" : !funded ? "not seen yet" : `${formatCoins(deposit.total)} ${COIN} · ${Math.min(deposit.confirmations, deposit.needed)} of ${deposit.needed} confirmations`}
         </dd>
         {funded && deposit && deposit.counted < deposit.total && (
           <>
             <dt>Arrived after the close</dt>
-            <dd>{formatCoins(deposit.total - deposit.counted)} TAZ (returned)</dd>
+            <dd>{formatCoins(deposit.total - deposit.counted)} {COIN} (returned)</dd>
           </>
         )}
         <dt>Order</dt>
@@ -988,7 +992,7 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
 
       {funded && !enough && auction.state === "open" && (
         <p className="error small" style={{ marginBottom: 0 }}>
-          Your deposit is smaller than your order{bond > 0 ? " plus the bond" : ""} ({formatCoins(needed)} TAZ). Send the difference to the same address
+          Your deposit is smaller than your order{bond > 0 ? " plus the bond" : ""} ({formatCoins(needed)} {COIN}). Send the difference to the same address
           before the sale closes, or this order won&apos;t count.
         </p>
       )}
@@ -1001,15 +1005,15 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
             {view.standing === "won" && view.unit && (
               <>
                 {" "}
-                You pay {formatCoins(view.unit.price)} TAZ, what you offered.
-                {(deposit?.total ?? 0) > view.unit.price && <> The rest of your {formatCoins(deposit!.total)} TAZ deposit comes back to you.</>}
+                You pay {formatCoins(view.unit.price)} {COIN}, what you offered.
+                {(deposit?.total ?? 0) > view.unit.price && <> The rest of your {formatCoins(deposit!.total)} {COIN} deposit comes back to you.</>}
               </>
             )}
           </p>
           {view.standing === "won" && view.unit && view.unit.price !== ticket.amount && (
             // The browser's own record of the order is the ticket. The site's word is checked against it, not taken.
             <p className="error small" id="price-mismatch">
-              The site says this order pays {formatCoins(view.unit.price)} TAZ, but your ticket says you offered {formatCoins(ticket.amount)} TAZ. That should
+              The site says this order pays {formatCoins(view.unit.price)} {COIN}, but your ticket says you offered {formatCoins(ticket.amount)} {COIN}. That should
               not happen. Keep your ticket and your wallet&apos;s record of the deposit.
             </p>
           )}
@@ -1028,7 +1032,7 @@ function MyOrder({ ticket, view, unknown, auction, note, refresh }: { ticket: Ti
             <dl className="kv" key={p.txid + p.kind}>
               <dt>{p.kind === "winner-change" ? "Returned above your order" : p.late ? "Late deposit returned" : "Returned to you"}</dt>
               <dd>
-                {formatCoins(p.paid)} TAZ <span className="muted">(after {formatCoins(p.owed - p.paid)} fee share)</span>
+                {formatCoins(p.paid)} {COIN} <span className="muted">(after {formatCoins(p.owed - p.paid)} fee share)</span>
               </dd>
               <dt>Transaction ({p.status})</dt>
               <dd>

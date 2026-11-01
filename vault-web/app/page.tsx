@@ -27,6 +27,7 @@ import AuctionsGrid from "./components/AuctionsGrid";
 import LandMotion from "./components/LandMotion";
 import PracticePanel from "./components/PracticePanel";
 import WhoSees from "./components/WhoSees";
+import { MAINNET, NETWORK_NAME } from "@/lib/network";
 
 export const dynamic = "force-dynamic";
 
@@ -452,8 +453,8 @@ const LIMITS = [
     text: "As with any web app. The proof and the signed receipts are there so a result can also be checked without the page.",
   },
   {
-    title: "It runs on the Zcash testnet.",
-    text: "The coins have no value. Dark Vault is in development.",
+    title: MAINNET ? "This copy runs on Zcash mainnet, with real money." : "It runs on the Zcash testnet.",
+    text: MAINNET ? "Amounts are capped while Dark Vault is new. Start with amounts you can afford to lose." : "The coins have no value. Dark Vault is in development.",
   },
 ];
 
@@ -665,7 +666,7 @@ export default function Home() {
             Everything Dark Vault Does
           </h2>
           <p className="lead" data-reveal>
-            Not only auctions. Three markets share one shielded escrow, and all of it works today on the Zcash testnet.
+            Not only auctions. Three markets share one shielded escrow, and all of it works today on the {NETWORK_NAME}.
           </p>
           <div className="features-grid">
             {MARKET_FEATURES.map((m, i) => (

@@ -14,7 +14,8 @@ const csp = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  `connect-src 'self'${dev ? " ws:" : ""}`,
+  // The mainnet copy's Pay Anywhere asks NEAR Intents for quotes from the browser, so this site never sees the paying wallet.
+  `connect-src 'self'${process.env.NEXT_PUBLIC_ZCASH_NETWORK === "main" ? " https://1click.chaindefuser.com" : ""}${dev ? " ws:" : ""}`,
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

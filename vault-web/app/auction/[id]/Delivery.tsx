@@ -33,6 +33,7 @@ import { DecideBy, EvidencePhotos, ProofRequests } from "./DisputeTools";
 import { SellerReturn, WinnerReturn } from "./ReturnSteps";
 import { tokenOf, type Ticket } from "@/lib/tickets";
 import type { BidView, PublicAuction, SellerView } from "@/lib/views";
+import { COIN } from "@/lib/network";
 
 const when = (t: number | null) =>
   t ? new Date(t).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "the time limit";
@@ -270,7 +271,7 @@ export function SellerDelivery({
       {!unit && <h3>Delivery</h3>}
       {d.held != null && !d.resolution && (
         <p className="small">
-          <strong>{formatCoins(d.held)} TAZ is held</strong> until {promise ? "the promise is kept" : `the ${t.lot} is handed over`}.
+          <strong>{formatCoins(d.held)} {COIN} is held</strong> until {promise ? "the promise is kept" : `the ${t.lot} is handed over`}.
         </p>
       )}
 
@@ -488,8 +489,8 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
   const stakes =
     d.buyer_bond > 0 || d.seller_bond > 0 ? (
       <p className="small muted" id="winner-stakes">
-        {d.buyer_bond > 0 && <>Your bond of {formatCoins(d.buyer_bond)} TAZ comes back with a completed {t.sale}. You lose it to the seller only if you open a dispute and lose it. </>}
-        {d.seller_bond > 0 && <>The seller has {formatCoins(d.seller_bond)} TAZ of their own at stake, which goes to you if they are found at fault.</>}
+        {d.buyer_bond > 0 && <>Your bond of {formatCoins(d.buyer_bond)} {COIN} comes back with a completed {t.sale}. You lose it to the seller only if you open a dispute and lose it. </>}
+        {d.seller_bond > 0 && <>The seller has {formatCoins(d.seller_bond)} {COIN} of their own at stake, which goes to you if they are found at fault.</>}
       </p>
     ) : null;
 
@@ -581,7 +582,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
             Your browser hands the site the key to this one {t.lot}, so it can open exactly what was delivered and compare it with the
             description.{auction.private && ` This ${t.auction} is private, so your browser also hands over the key to its description (to that text and nothing else).`} The
             seller and the site can read what you write. Next, the site asks you both for proof. Your payment stays held until it decides.
-            {d.buyer_bond > 0 && <> If the {t.lot} is found to be as described, your bond of {formatCoins(d.buyer_bond)} TAZ goes to the seller.</>}
+            {d.buyer_bond > 0 && <> If the {t.lot} is found to be as described, your bond of {formatCoins(d.buyer_bond)} {COIN} goes to the seller.</>}
           </p>
           <div className="row" style={{ marginTop: 12 }}>
             <button className="primary" disabled={busy || reason.trim().length < 10}>
@@ -698,7 +699,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
           <p className="hint">
             The seller and the site can read this.{auction.private && ` This ${t.auction} is private, so your browser also hands the site the key to its description (to that text and nothing else), so it can see what was promised.`} Next,
             the site asks you both for proof. Your payment stays held until it decides.
-            {d.buyer_bond > 0 && <> If it is decided against you, your bond of {formatCoins(d.buyer_bond)} TAZ goes to the seller.</>}
+            {d.buyer_bond > 0 && <> If it is decided against you, your bond of {formatCoins(d.buyer_bond)} {COIN} goes to the seller.</>}
           </p>
           <div className="row" style={{ marginTop: 12 }}>
             <button className="primary" disabled={busy || reason.trim().length < 10}>
@@ -760,7 +761,7 @@ export function WinnerDelivery({ auction, ticket, view, refresh }: { auction: Pu
         <dl className="kv" id="winner-payout">
           <dt>Sent to you</dt>
           <dd>
-            {formatCoins(d.refund.paid)} TAZ{" "}
+            {formatCoins(d.refund.paid)} {COIN}{" "}
             {d.refund.owed > d.refund.paid && <span className="muted">(after {formatCoins(d.refund.owed - d.refund.paid)} network fee)</span>}
           </dd>
           <dt>Transaction ({d.refund.status})</dt>

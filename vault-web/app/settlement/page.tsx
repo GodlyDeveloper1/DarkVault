@@ -6,6 +6,7 @@ import MyDeals from "../components/MyDeals";
 import OpenDeal from "../components/OpenDeal";
 import { listAuctions } from "@/lib/store";
 import { ledgerDeals } from "@/lib/views";
+import { COIN } from "@/lib/network";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Settlement" };
@@ -111,7 +112,7 @@ export default async function Settlement() {
           </div>
           <div>
             <b className="mono">{formatCoins(volume)}</b>
-            <span>TAZ Settled Through Escrow</span>
+            <span>{COIN} Settled Through Escrow</span>
           </div>
           <div>
             <b>2</b>

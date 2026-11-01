@@ -2,6 +2,7 @@ import Link from "next/link";
 import { formatCoins } from "vault-core";
 import type { PublicAuction } from "@/lib/views";
 import { SeatsTag, TileCover } from "./AuctionTile";
+import { COIN } from "@/lib/network";
 
 export const unitsWord = (n: number) => `${n} ${n === 1 ? "Unit" : "Units"}`;
 
@@ -38,7 +39,7 @@ export default function SaleTile({ a }: { a: PublicAuction }) {
       <div className="meta">
         <div>
           <span>{sold ? "lowest winning order" : "lowest price"}</span>
-          <b>{formatCoins(sold ? a.outcome!.price! : a.reserve)} TAZ</b>
+          <b>{formatCoins(sold ? a.outcome!.price! : a.reserve)} {COIN}</b>
         </div>
         <div style={{ textAlign: "right" }}>
           <span>sealed orders</span>

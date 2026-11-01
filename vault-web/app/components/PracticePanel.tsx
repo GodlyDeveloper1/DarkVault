@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { formatCoins } from "vault-core";
 import Countdown from "./Countdown";
+import { COIN } from "@/lib/network";
 
 interface Practice {
   enabled: boolean;
@@ -78,7 +79,7 @@ export default function PracticePanel() {
           <p className="muted small" style={{ margin: 0, maxWidth: 620 }}>
             The site lists a small sealed lot and {p.bots} house bidders (automated) bid on it. A practice wallet gives you coins to bid
             against them. It takes about {minutes} {minutes === 1 ? "minute" : "minutes"}, with real shielded deposits on the Zcash testnet, a time-locked bid and a
-            proof of the result. House bidders never bid above {formatCoins(p.bot_max ?? 0)} TAZ.
+            proof of the result. House bidders never bid above {formatCoins(p.bot_max ?? 0)} {COIN}.
           </p>
         </div>
         <div className="practice-act">

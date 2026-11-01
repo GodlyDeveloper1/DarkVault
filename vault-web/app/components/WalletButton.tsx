@@ -13,6 +13,7 @@ import { allTickets, backupFile, parseBackup, saveTicket, WALLET_EVENT, type Tic
 import { addressProblem, loadWallet, maskAddress, OPEN_EVENT, saveWallet, type Wallet } from "@/lib/wallet";
 import { forgetPracticeWallet, makePracticeWallet, practiceWallet } from "@/lib/practiceClient";
 import type { WalletView } from "@/lib/house/practice";
+import { COIN, UA_PREFIX } from "@/lib/network";
 
 function download(name: string, text: string) {
   const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
@@ -199,7 +200,7 @@ export default function WalletButton() {
             {showForm && (
               <form onSubmit={connect} id="wallet-form">
                 <label htmlFor="wallet-address">Shielded address for refunds (optional)</label>
-                <input id="wallet-address" className="mono" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="utest1…" spellCheck={false} autoComplete="off" />
+                <input id="wallet-address" className="mono" value={address} onChange={(e) => setAddress(e.target.value)} placeholder={`${UA_PREFIX}…`} spellCheck={false} autoComplete="off" />
                 <p className={problem ? "hint error" : "hint"}>
                   {problem ??
                     "Saved in this browser and filled in when you bid. Leave it empty to paste a fresh address for each bid: that is the most private choice, because one saved address lets this site tell that your bids belong together."}
@@ -226,11 +227,11 @@ export default function WalletButton() {
                   <>
                     <dl className="kv" style={{ margin: 0 }}>
                       <dt>Balance</dt>
-                      <dd id="practice-balance">{formatCoins(pw.balance)} TAZ</dd>
+                      <dd id="practice-balance">{formatCoins(pw.balance)} {COIN}</dd>
                       {pw.locked > 0 && (
                         <>
                           <dt>In open auctions</dt>
-                          <dd>{formatCoins(pw.locked)} TAZ</dd>
+                          <dd>{formatCoins(pw.locked)} {COIN}</dd>
                         </>
                       )}
                     </dl>
@@ -290,7 +291,7 @@ export default function WalletButton() {
                     <li key={t.bid_id}>
                       <Link href={roomPath(row.auction, t.auction_id)} onClick={close}>
                         <span className="wb-title">{row.auction?.title ?? "Auction"}</span>
-                        <span className="mono wb-amount">{formatCoins(t.amount)} TAZ</span>
+                        <span className="mono wb-amount">{formatCoins(t.amount)} {COIN}</span>
                         <span className={`wb-status ${s.cls}`}>{s.text}</span>
                       </Link>
                     </li>

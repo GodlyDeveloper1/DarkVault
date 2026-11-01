@@ -5,6 +5,7 @@ import { formatCoins } from "vault-core";
 import { loadListed, loadSales } from "../components/AuctionsGrid";
 import { listAuctions } from "@/lib/store";
 import { ledgerDeals, type PublicAuction } from "@/lib/views";
+import { COIN } from "@/lib/network";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "Ledger" };
@@ -79,7 +80,7 @@ function handover(a: Settling, buyer: string): Said {
 function auctionResult(a: PublicAuction): Said {
   if (!a.outcome) return { text: a.scheme === 2 ? "Opening The Bids" : "Waiting For Reveals", tone: "amber" };
   if (a.delivery?.stage === "refunded") return { text: "Sale Undone", tone: "red" };
-  return a.outcome.sold ? { text: `Sold For ${formatCoins(a.outcome.price!)} TAZ`, tone: "lime" } : { text: "Not Sold", tone: "" };
+  return a.outcome.sold ? { text: `Sold For ${formatCoins(a.outcome.price!)} ${COIN}`, tone: "lime" } : { text: "Not Sold", tone: "" };
 }
 
 /** Order Flow: what a batch sale's row says. The one public amount is the lowest order that won. */
@@ -87,7 +88,7 @@ function saleResult(a: PublicAuction): Said {
   if (!a.outcome) return { text: "Opening The Orders", tone: "amber" };
   if (a.outcome.cancelled) return { text: "Never Opened", tone: "" };
   const sold = a.batch?.sold ?? 0;
-  return a.outcome.sold ? { text: `${sold} Of ${a.batch!.units} Units Sold, From ${formatCoins(a.outcome.price!)} TAZ`, tone: "lime" } : { text: "Nothing Sold", tone: "" };
+  return a.outcome.sold ? { text: `${sold} Of ${a.batch!.units} Units Sold, From ${formatCoins(a.outcome.price!)} ${COIN}`, tone: "lime" } : { text: "Nothing Sold", tone: "" };
 }
 
 function saleHandover(a: PublicAuction): Said {
@@ -171,7 +172,7 @@ export default async function Ledger() {
           </div>
           <div>
             <b className="mono">{formatCoins(volume)}</b>
-            <span>TAZ Through The Vault, At Public Prices</span>
+            <span>{COIN} Through The Vault, At Public Prices</span>
           </div>
         </section>
 
@@ -286,7 +287,7 @@ export default async function Ledger() {
                     <i className="badge private-tag">Settlement</i>
                   </span>
                   <span role="cell" data-label="Result" className="ledger-tone lime">
-                    Settled For {formatCoins(d.price)} TAZ
+                    Settled For {formatCoins(d.price)} {COIN}
                   </span>
                   <span role="cell" data-label="Sealed Bids">
                     <i className="ledger-sub">no bidding</i>

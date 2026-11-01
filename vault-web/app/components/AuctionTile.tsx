@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { formatCoins } from "vault-core";
 import type { PublicAuction } from "@/lib/views";
+import { COIN } from "@/lib/network";
 
 export function stateLabel(a: PublicAuction): { text: string; cls: string } {
   if (a.state === "funding") return { text: "Not open yet", cls: "" };
@@ -59,7 +60,7 @@ export default function AuctionTile({ a }: { a: PublicAuction }) {
       <div className="meta">
         <div>
           <span>{a.outcome?.sold ? "sold for" : "reserve"}</span>
-          <b>{formatCoins(a.outcome?.sold ? a.outcome.price! : a.reserve)} TAZ</b>
+          <b>{formatCoins(a.outcome?.sold ? a.outcome.price! : a.reserve)} {COIN}</b>
         </div>
         <div style={{ textAlign: "right" }}>
           <span>sealed bids</span>

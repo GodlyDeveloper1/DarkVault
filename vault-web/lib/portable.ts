@@ -10,8 +10,9 @@ import { isInviteKey } from "vault-core";
 import { holdsInvite, rememberInvite } from "./invites";
 import { allTickets, announce, loadTickets, parseBackup, saveTicket, type Ticket } from "./tickets";
 import { addressProblem, loadWallet, maskAddress, saveWallet } from "./wallet";
+import { NETWORK_NAME } from "@/lib/network";
 
-export const VAULT_FILE_HEADER = "DARK VAULT FILE (Zcash testnet). Keep this private: it holds the bids, seller keys and invites of one browser.";
+export const VAULT_FILE_HEADER = `DARK VAULT FILE (${NETWORK_NAME}). Keep this private: it holds the bids, seller keys and invites of one browser.`;
 
 const HEX64 = /^[0-9a-f]{64}$/;
 const ID = /^[0-9a-f]{32}$/;

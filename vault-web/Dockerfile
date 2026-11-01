@@ -14,6 +14,9 @@ COPY vault-web/package.json vault-web/package-lock.json vault-web/
 RUN cd vault-web && npm ci
 COPY vault-core vault-core
 COPY vault-web vault-web
+# "main" builds the mainnet copy (Pay Anywhere through NEAR Intents); anything else is testnet.
+ARG NEXT_PUBLIC_ZCASH_NETWORK=test
+ENV NEXT_PUBLIC_ZCASH_NETWORK=$NEXT_PUBLIC_ZCASH_NETWORK
 RUN cd vault-web && npm run build
 
 FROM node:22-bookworm-slim

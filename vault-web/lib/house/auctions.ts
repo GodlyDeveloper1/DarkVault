@@ -43,6 +43,7 @@ import { loadAuction, withAuction } from "../store";
 import type { Auction } from "../types";
 import { botMax, HOUSE, slotAmount, walletStart } from "./config";
 import { payFromSlot, purseTick, readPurse, readySlots, savePurse, today, treasuryAddress, withPurse, type Purse } from "./purse";
+import { COIN } from "@/lib/network";
 
 const DIR = path.join(DATA_DIR, "house", "auctions");
 
@@ -148,7 +149,7 @@ export async function startPracticeAuction(): Promise<{ id: string } | { error: 
       description:
         `A practice auction run by this site, so you can try a whole auction in a few minutes. ` +
         `The lot is a short encrypted note that only the winner can read. ${HOUSE.bots} house bidders (automated) bid against you; ` +
-        `they never bid above ${formatCoins(botMax())} TAZ. The coins are real testnet coins and have no value.`,
+        `they never bid above ${formatCoins(botMax())} ${COIN}. The coins are real testnet coins and have no value.`,
       reserve: HOUSE.reserve,
       // No highest bid, like any listing. A practice wallet's deposit is a ready-made amount (HOUSE.ceiling), so its own bids can't be higher than that.
       durationSec: HOUSE.durationSec,

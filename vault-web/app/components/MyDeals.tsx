@@ -10,6 +10,7 @@ import { dealLabel } from "@/app/deal/[id]/DealRoom";
 import { fetchAuction } from "@/lib/bidStatus";
 import { allTickets, WALLET_EVENT } from "@/lib/tickets";
 import type { PublicAuction } from "@/lib/views";
+import { COIN } from "@/lib/network";
 
 interface Mine {
   id: string;
@@ -79,7 +80,7 @@ export default function MyDeals({ empty = true }: { empty?: boolean }) {
                   <span className="wb-title">
                     {deal.title} <i className="deal-role">{role}</i>
                   </span>
-                  <span className="mono wb-amount">{formatCoins(deal.deal!.price)} TAZ</span>
+                  <span className="mono wb-amount">{formatCoins(deal.deal!.price)} {COIN}</span>
                   <span className={`wb-status ${s.cls === "open" || s.cls === "sold" ? "lime" : s.cls === "settling" ? "amber" : ""}`}>{s.text}.</span>
                 </Link>
               </li>

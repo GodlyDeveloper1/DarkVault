@@ -56,7 +56,7 @@ fn load_or_create_wallet(path: &PathBuf) -> WalletFile {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, serde_json::to_string_pretty(&wallet).unwrap()).expect("write wallet");
     fs::rename(&tmp, path).expect("save wallet"); // atomic replace
-    println!("created new testnet wallet at {}", path.display());
+    println!("created new {} wallet at {}", if wallet::is_mainnet() { "MAINNET" } else { "testnet" }, path.display());
     wallet
 }
 
@@ -182,6 +182,24 @@ async fn check_address(Json(body): Json<CheckBody>) -> Json<CheckResult> {
 #[tokio::main]
 async fn main() {
     let dir = data_dir();
+    // A data folder belongs to one network. Starting a mainnet signer on a
+    // testnet folder (or the other way round) would mix keys and databases.
+    let want = if wallet::is_mainnet() { "main" } else { "test" };
+    let marker = dir.join("network");
+    match std::fs::read_to_string(&marker) {
+        Ok(found) if found.trim() != want => panic!(
+            "{} holds a {}net wallet but ZCASH_NETWORK says {}net: use another SIGNER_DATA_DIR",
+            dir.display(), found.trim(), want
+        ),
+        Ok(_) => {}
+        Err(_) => {
+            let _ = std::fs::create_dir_all(&dir);
+            if dir.join("wallet.json").exists() && want == "main" {
+                panic!("{} already holds a wallet from before networks were recorded (testnet): use another SIGNER_DATA_DIR for mainnet", dir.display());
+            }
+            std::fs::write(&marker, want).expect("could not write the network marker");
+        }
+    }
     let path = dir.join("wallet.json");
     let wallet_file = load_or_create_wallet(&path);
 
@@ -192,7 +210,9 @@ async fn main() {
     let server = std::env::var("LIGHTWALLETD_URL")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "https://testnet.zec.rocks:443".to_string());
+        .unwrap_or_else(|| {
+            if wallet::is_mainnet() { "https://zec.rocks:443" } else { "https://testnet.zec.rocks:443" }.to_string()
+        });
     let birthday = std::env::var("SIGNER_BIRTHDAY").ok().and_then(|s| s.parse().ok());
     // Deposits from other wallets need 10 confirmations by default (ZIP 315),
     // about 12 minutes on testnet. A lower number makes demos quicker and is

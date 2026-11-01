@@ -1,3 +1,4 @@
+import { COIN } from "@/lib/network";
 // The Vault Guide: a scripted helper that runs entirely in the browser.
 //
 // It is not an AI. It has prepared answers to common questions about Dark
@@ -317,7 +318,11 @@ const INTENTS: Intent[] = [
     keys: ["bond", "bonds", "stake", "something to lose", "penalty", "forfeit"],
     reply: {
       text:
-        "Both sides have something to lose. The seller puts down a bond before bidding opens, and every deposit includes one. It is fixed: 10% of the price, never under 0.0005 TAZ, the same for both sides.\n\nA seller who doesn't hand the lot over, or loses a dispute, loses their bond to the winner. A winner who opens a dispute and loses it loses theirs to the seller. A seller and a winner who both do their part get their bonds back in full.\n\nOnly the bond asked for is ever at stake. Anything a seller sends above it comes straight back.",
+        `Both sides have something to lose. The seller puts down a bond before bidding opens, and every deposit includes one. It is fixed: 10% of the price, never under 0.0005 ${COIN}, the same for both sides.
+
+A seller who doesn't hand the lot over, or loses a dispute, loses their bond to the winner. A winner who opens a dispute and loses it loses theirs to the seller. A seller and a winner who both do their part get their bonds back in full.
+
+Only the bond asked for is ever at stake. Anything a seller sends above it comes straight back.`,
       next: ["deliver", "dispute"],
     },
   },
