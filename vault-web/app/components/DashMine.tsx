@@ -14,7 +14,7 @@ import { loadWallet, OPEN_EVENT } from "@/lib/wallet";
 import { stateLabel } from "./AuctionTile";
 import MyDeals from "./MyDeals";
 import { saleLabel } from "./SaleTile";
-import { COIN } from "@/lib/network";
+import { COIN, MAINNET } from "@/lib/network";
 
 /** The auctions this browser holds a seller's key for. */
 function listingIds(): string[] {
@@ -95,7 +95,7 @@ export default function DashMine({ open, total }: { open: number; total: number 
     {
       done: hasWallet,
       title: "Get A Wallet.",
-      text: "Connect your own, or take a practice wallet with testnet coins in it.",
+      text: MAINNET ? "Connect your own Zcash wallet, with a shielded (u1) address." : "Connect your own, or take a practice wallet with testnet coins in it.",
       act: (
         <button type="button" className="link" onClick={() => window.dispatchEvent(new Event(OPEN_EVENT))}>
           Open The Wallet
@@ -158,7 +158,7 @@ export default function DashMine({ open, total }: { open: number; total: number 
           <Art name="shield" />
           <b className="mono">{chain ? (chain.online ? chain.scanned_height?.toLocaleString("en-US") : "Offline") : "…"}</b>
           <span>
-            Zcash Testnet Block
+            {MAINNET ? "Zcash Mainnet Block" : "Zcash Testnet Block"}
             <i>{chain && !chain.online ? "the signer is not answering" : "every payment is shielded"}</i>
           </span>
         </div>

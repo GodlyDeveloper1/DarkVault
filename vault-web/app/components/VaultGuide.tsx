@@ -190,7 +190,10 @@ export default function VaultGuide() {
 
   function act(a: NonNullable<Reply["actions"]>[number]) {
     if (a.event) window.dispatchEvent(new Event(a.event));
-    if (a.href) router.push(a.href);
+    if (a.href) {
+      if (/^https?:\/\//.test(a.href)) window.location.assign(a.href);
+      else router.push(a.href);
+    }
     // On a narrow screen the panel covers the page: get out of the way.
     if (window.innerWidth < 700 || a.event) setOpen(false);
   }

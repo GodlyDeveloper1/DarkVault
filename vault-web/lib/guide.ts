@@ -1,4 +1,4 @@
-import { COIN } from "@/lib/network";
+import { COIN, MAINNET } from "@/lib/network";
 // The Vault Guide: a scripted helper that runs entirely in the browser.
 //
 // It is not an AI. It has prepared answers to common questions about Dark
@@ -143,7 +143,14 @@ const INTENTS: Intent[] = [
     id: "practice",
     q: "Can I try it without coins?",
     keys: ["practice", "try", "no coins", "without coins", "test coins", "demo", "faucet", "taz", "free"],
-    reply: {
+    reply: MAINNET
+      ? {
+          text:
+            "Not on this copy. It runs on Zcash mainnet with real ZEC, so there are no practice auctions or practice wallets. You can try the whole thing for free on the testnet copy, where the coins have no value.\n\nHere you can pay in another coin (USDC, ETH, SOL, BTC or NEAR) through NEAR Intents: press Pay With Another Coin on any deposit screen.",
+          next: ["bid", "wallet"],
+          actions: [{ label: "Open The Testnet Copy", href: "https://zecdarkvault.xyz" }],
+        }
+      : {
       text:
         "Yes. Start a practice auction: the site lists a small lot, automated house bidders bid on it, and a practice wallet gives you testnet coins to bid against them. It takes a few minutes and everything on chain is real: shielded deposits, a time-locked bid and a proof of the result.\n\nA practice wallet is held by the site and only works in practice auctions. Real auctions are bid on from your own wallet.",
       next: ["bid", "wallet"],
@@ -352,7 +359,7 @@ Only the bond asked for is ever at stake. Anything a seller sends above it comes
     keys: ["limit", "limits", "not protect", "weakness", "risk", "downside", "catch", "trust the site", "custody", "custodial", "ip address"],
     reply: {
       text:
-        "Said plainly:\n• After the close the site learns the funded bids, so it can decide. Nobody else does.\n• The site sees every deposit, so an exact deposit tells it the bid. A larger, round one hides it.\n• The time lock is as trustworthy as drand.\n• An auction seats 20 bidders at a time, a sale 20 orders. A seat goes back if its bid isn't funded within 10 minutes.\n• The site holds the deposits while an auction runs.\n• The page's code comes from the site, as with any web app. The proof and the receipts can be checked without it.\n• It runs on the Zcash testnet and is in development.",
+        "Said plainly:\n• After the close the site learns the funded bids, so it can decide. Nobody else does.\n• The site sees every deposit, so an exact deposit tells it the bid. A larger, round one hides it.\n• The time lock is as trustworthy as drand.\n• An auction seats 20 bidders at a time, a sale 20 orders. A seat goes back if its bid isn't funded within 10 minutes.\n• The site holds the deposits while an auction runs.\n• The page's code comes from the site, as with any web app. The proof and the receipts can be checked without it.\n• " + (MAINNET ? "It runs on Zcash mainnet with real money, is new, and caps amounts while it is." : "It runs on the Zcash testnet and is in development."),
       next: ["proof", "sees"],
       actions: [{ label: "Read The Limits", href: "/#limits" }],
     },
