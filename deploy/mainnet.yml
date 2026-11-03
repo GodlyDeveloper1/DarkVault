@@ -20,7 +20,13 @@ services:
       LIGHTWALLETD_URL: ${LIGHTWALLETD_URL:-https://zec.rocks:443}
       VAULT_MIN_CONFIRMATIONS: ${VAULT_MIN_CONFIRMATIONS:-3}
 
+  # No practice auctions on mainnet, so the house signer does not run here.
+  house-signer:
+    profiles: ["testnet-only"]
+
   web:
+    depends_on: !override
+      - signer
     build:
       args:
         NEXT_PUBLIC_ZCASH_NETWORK: main
@@ -29,6 +35,8 @@ services:
       HOUSE_SIGNER_URL: ""
       VAULT_MAINNET_MAX_ZAT: ${VAULT_MAINNET_MAX_ZAT:-2000000}
       TRUST_PROXY: "1"
+      # The site's own address, for the link preview card.
+      SITE_URL: ${SITE_URL:-}
     ports: !override
       - "127.0.0.1:${WEB_PORT:-3200}:3100"
     networks:
